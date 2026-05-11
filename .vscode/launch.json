@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Roguelike",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\1.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "C:\\Users\\Public\\Presentation Apps\\Python313\\python.exe"
+    }
+  ]
+}

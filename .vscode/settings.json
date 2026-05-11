@@ -1,0 +1,11 @@
+{
+  "python.defaultInterpreterPath": "C:\\Users\\Public\\Presentation Apps\\Python313\\python.exe",
+  "python.terminal.activateEnvironment": false,
+  "code-runner.executorMap": {
+    "python": "& \"C:\\Users\\Public\\Presentation Apps\\Python313\\python.exe\""
+  },
+  "code-runner.runInTerminal": true,
+  "terminal.integrated.env.windows": {
+    "Path": "C:\\Users\\Public\\Presentation Apps\\Python313;C:\\Users\\Public\\Presentation Apps\\Python313\\Scripts;${env:Path}"
+  }
+}
