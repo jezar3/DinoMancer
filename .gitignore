@@ -1,0 +1,15 @@
+build/
+dist/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local editor/runtime clutter
+.vscode/
+*.lnk
+
+# PyInstaller build artifacts
+*.pkg
+*.toc
+*.pyz
+*.zip
