@@ -92,18 +92,19 @@ def startMenu(window, clock):
 
     controls = [
         ("WASD", "Move"),
+        ("Mouse", "Rotate Camera"),
         ("Left Click", "Attack"),
-        ("Right Click + Drag", "Rotate Camera"),
         ("Q", "Dash"),
         ("E", "Switch Weapon"),
         ("R", "Reload"),
-        ("T", "Lock Mouse"),
+        ("T", "Unlock / Lock Mouse"),
+        ("Right Drag", "Rotate When Unlocked"),
         ("ESC", "Quit"),
     ]
 
     ctrl_pad = 14
     ctrl_line_h = max(16, sh // 22)
-    ctrl_w = max(180, sw // 4)
+    ctrl_w = max(260, sw // 3)
     ctrl_h = ctrl_line_h * (len(controls) + 1) + ctrl_pad * 2
     ctrl_x = 16
     ctrl_y = sh // 2 - ctrl_h // 2
@@ -152,7 +153,7 @@ def startMenu(window, clock):
         window.blit(vig, (0, 0))
 
         window.blit(ctrl_bg, (ctrl_x, ctrl_y))
-        title_surf = ctrl_title_font.render("Controls", True, (255, 220, 80))
+        title_surf = ctrl_title_font.render("How To Play", True, (255, 220, 80))
         window.blit(title_surf, (ctrl_x + ctrl_pad, ctrl_y + ctrl_pad))
         for idx, (key, desc) in enumerate(controls):
             ly = ctrl_y + ctrl_pad + ctrl_line_h * (idx + 1)
@@ -219,12 +220,22 @@ pygame.draw.line(_cursor_surf, (255, 255, 255), (_ch, _ch + _gap), (_ch, _cs - 2
 pygame.draw.circle(_cursor_surf, (255, 60, 60), (_ch, _ch), 2)
 pygame.mouse.set_cursor(pygame.cursors.Cursor((_ch, _ch), _cursor_surf))
 
+
+def setMouseLock(locked, center=None):
+    pygame.event.set_grab(locked)
+    pygame.mouse.set_visible(True)
+    if locked and center is not None:
+        pygame.mouse.set_pos(center)
+    pygame.mouse.get_rel()
+
+
 sfx_casting = pygame.mixer.Sound("assets/Necromancer/SFX/necromancer_casting.mp3")
 sfx_death = pygame.mixer.Sound("assets/enemies/slime-SFX/slime_death.mp3")
 sfx_beam = pygame.mixer.Sound("assets/attacks/beam-SFX/beam.mp3")
 beam_channel = pygame.mixer.Channel(1)
 
 while True:
+    setMouseLock(False)
     pygame.mixer.music.stop()
     pygame.mixer.stop()
     god_mode = startMenu(window, clock)
@@ -245,7 +256,6 @@ while True:
     frameCount = 0
     bossWarned = False
     bossThemePlayed = False
-    mouseLocked = False
     tileMap = TileMap()
     camera = Camera(sw, sh)
     renderer = PerspectiveRenderer(sw, sh)
@@ -291,6 +301,8 @@ while True:
     running = True
     skill_card_rects = []
     mouseLockCenter = (sw // 2, sh // 2)
+    mouseLocked = True
+    setMouseLock(mouseLocked, mouseLockCenter)
 
     while running:
         if skillPicker.active:
@@ -339,10 +351,7 @@ while True:
                     dash.try_activate(player, camera.camYAW)
             if event.type == pygame.KEYDOWN and event.key == pygame.K_t:
                 mouseLocked = not mouseLocked
-                pygame.event.set_grab(mouseLocked)
-                if mouseLocked:
-                    pygame.mouse.set_pos(mouseLockCenter)
-                    pygame.mouse.get_rel()
+                setMouseLock(mouseLocked, mouseLockCenter)
             if event.type == pygame.KEYDOWN and event.key == pygame.K_e:
                 beam.switchWeapon()
             if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
