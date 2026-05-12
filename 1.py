@@ -112,11 +112,25 @@ def startMenu(window, clock):
     pygame.draw.rect(ctrl_bg, (0, 0, 0, 160), (0, 0, ctrl_w, ctrl_h), border_radius=8)
     pygame.draw.rect(ctrl_bg, (140, 120, 180, 100), (0, 0, ctrl_w, ctrl_h), 1, border_radius=8)
 
-    god_mode = False
-    chk_size = max(18, sw // 40)
-    chk_x = sw // 2 - chk_size // 2 - 50
-    chk_y = sh - sh // 6 - 45
-    chk_rect = pygame.Rect(chk_x, chk_y, chk_size, chk_size)
+    selected_mode = None  
+    card_font = pygame.font.SysFont("Monocraft", max(14, sw // 38))
+    sub_font = pygame.font.SysFont("Monocraft", max(9, sw // 60))
+    
+    
+    card_w = max(200, sw // 4)
+    card_h = max(56, sh // 8)
+    card_gap = 12
+    panel_pad = 16
+    panel_w = card_w + panel_pad * 2
+    panel_h = card_h * 2 + card_gap + panel_pad * 2 + max(16, sh // 24)
+    panel_x = sw - panel_w - 16
+    panel_y = sh // 2 - panel_h // 2
+
+    card_x = panel_x + panel_pad
+    fast_card_y = panel_y + panel_pad + max(16, sh // 24)
+    jesus_card_y = fast_card_y + card_h + card_gap
+    chk_rect_fast = pygame.Rect(card_x, fast_card_y, card_w, card_h)
+    chk_rect_jesus = pygame.Rect(card_x, jesus_card_y, card_w, card_h)
 
     particles = []
     for _ in range(25):
@@ -129,14 +143,17 @@ def startMenu(window, clock):
         pygame.draw.rect(vig, (0, 0, 0, a), (border, border, sw - border * 2, sh - border * 2), 1)
 
     while True:
+        mx, my = pygame.mouse.get_pos()
         for e in pygame.event.get():
             if e.type == pygame.QUIT or (e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE):
                 pygame.quit(); raise SystemExit
             if e.type == pygame.KEYDOWN and e.key == pygame.K_RETURN:
-                return god_mode
+                return selected_mode
             if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
-                if chk_rect.collidepoint(e.pos):
-                    god_mode = not god_mode
+                if chk_rect_jesus.collidepoint(e.pos):
+                    selected_mode = None if selected_mode == "jesus" else "jesus"
+                elif chk_rect_fast.collidepoint(e.pos):
+                    selected_mode = None if selected_mode == "fast" else "fast"
 
         t = pygame.time.get_ticks()
         window.blit(bg, (0, 0))
@@ -166,20 +183,80 @@ def startMenu(window, clock):
         txt.set_alpha(alpha)
         window.blit(txt, txt.get_rect(center=(sw // 2, sh - sh // 6)))
 
-        box_col = (255, 220, 60) if god_mode else (140, 140, 160)
-        pygame.draw.rect(window, box_col, chk_rect, 2, border_radius=4)
-        if god_mode:
-            fill = pygame.Surface((chk_size, chk_size), pygame.SRCALPHA)
-            fill.fill((255, 220, 60, 50))
-            window.blit(fill, chk_rect.topleft)
-            pygame.draw.line(window, (255, 220, 60),
-                             (chk_rect.x + 4, chk_rect.centery),
-                             (chk_rect.centerx - 1, chk_rect.bottom - 5), 3)
-            pygame.draw.line(window, (255, 220, 60),
-                             (chk_rect.centerx - 1, chk_rect.bottom - 5),
-                             (chk_rect.right - 4, chk_rect.y + 4), 3)
-        label = chk_font.render("God Mode", True, (255, 220, 60) if god_mode else (180, 180, 190))
-        window.blit(label, (chk_rect.right + 10, chk_rect.centery - label.get_height() // 2))
+        # ── Mode selector panel (right side) ──
+        panel_bg = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        pygame.draw.rect(panel_bg, (0, 0, 0, 170), (0, 0, panel_w, panel_h), border_radius=10)
+        pygame.draw.rect(panel_bg, (180, 140, 255, 90), (0, 0, panel_w, panel_h), 1, border_radius=10)
+        window.blit(panel_bg, (panel_x, panel_y))
+        panel_title = ctrl_title_font.render("Game Mode", True, (255, 220, 80))
+        window.blit(panel_title, (panel_x + panel_w // 2 - panel_title.get_width() // 2,
+                                  panel_y + panel_pad - 2))
+
+        # --- Helper to draw a mode card ---
+        def _draw_card(rect, active, hovered, color_on, title_text, desc_text):
+            pulse = 0.5 + 0.5 * math.sin(t * 0.005)
+            # background
+            card_surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+            if active:
+                bg_a = int(70 + 30 * pulse)
+                card_surf.fill((*color_on, bg_a))
+            elif hovered:
+                card_surf.fill((255, 255, 255, 18))
+            else:
+                card_surf.fill((255, 255, 255, 8))
+            window.blit(card_surf, rect.topleft)
+            # border
+            if active:
+                glow_a = int(180 + 75 * pulse)
+                border_col = (*color_on[:3], min(255, glow_a))
+                pygame.draw.rect(window, border_col, rect, 3, border_radius=8)
+                # outer glow ring
+                glow_rect = rect.inflate(6, 6)
+                glow_s = pygame.Surface((glow_rect.w, glow_rect.h), pygame.SRCALPHA)
+                pygame.draw.rect(glow_s, (*color_on[:3], int(40 * pulse)), (0, 0, glow_rect.w, glow_rect.h), 3, border_radius=10)
+                window.blit(glow_s, glow_rect.topleft)
+            elif hovered:
+                pygame.draw.rect(window, (220, 220, 240, 120), rect, 2, border_radius=8)
+            else:
+                pygame.draw.rect(window, (100, 100, 120, 100), rect, 1, border_radius=8)
+            # checkmark box
+            chk_sz = min(22, rect.h - 16)
+            chk_bx = rect.x + 10
+            chk_by = rect.centery - chk_sz // 2
+            chk_r = pygame.Rect(chk_bx, chk_by, chk_sz, chk_sz)
+            if active:
+                pygame.draw.rect(window, color_on, chk_r, border_radius=4)
+                pygame.draw.line(window, (0, 0, 0),
+                                 (chk_r.x + 4, chk_r.centery),
+                                 (chk_r.centerx - 1, chk_r.bottom - 4), 3)
+                pygame.draw.line(window, (0, 0, 0),
+                                 (chk_r.centerx - 1, chk_r.bottom - 4),
+                                 (chk_r.right - 4, chk_r.y + 4), 3)
+            else:
+                pygame.draw.rect(window, (160, 160, 180) if hovered else (100, 100, 120), chk_r, 2, border_radius=4)
+            # title
+            txt_x = chk_bx + chk_sz + 10
+            t_col = color_on if active else ((240, 240, 250) if hovered else (190, 190, 200))
+            title_s = card_font.render(title_text, True, t_col)
+            window.blit(title_s, (txt_x, rect.y + 6))
+            # subtitle
+            d_col = (*color_on[:3], 200) if active else (150, 150, 165)
+            desc_s = sub_font.render(desc_text, True, d_col)
+            window.blit(desc_s, (txt_x, rect.y + 6 + title_s.get_height() + 2))
+
+        fast_hovered = chk_rect_fast.collidepoint(mx, my)
+        jesus_hovered = chk_rect_jesus.collidepoint(mx, my)
+
+        _draw_card(chk_rect_fast,
+                   selected_mode == "fast", fast_hovered,
+                   (60, 200, 255),
+                   "N-mancer",""
+                   )
+
+        _draw_card(chk_rect_jesus,
+                   selected_mode == "jesus", jesus_hovered,
+                   (255, 220, 60),
+                   "JESUS Mode", "")
 
         pygame.display.flip()
         clock.tick(60)
@@ -237,13 +314,16 @@ while True:
     setMouseLock(False)
     pygame.mixer.music.stop()
     pygame.mixer.stop()
-    god_mode = startMenu(window, clock)
+    selected_mode = startMenu(window, clock)
+    god_mode = selected_mode == "jesus"
+    fast_mode = selected_mode == "fast"
 
     pygame.mixer.music.load("assets/Necromancer/SFX/before_boss_themesong.mp3")
     pygame.mixer.music.set_volume(0.67)
     pygame.mixer.music.play(-1)
 
-    player = Player(700, 700, 12)
+    player_speed = 36 if fast_mode else 12
+    player = Player(700, 700, player_speed)
     slimes = []
     ghouls = []
 
