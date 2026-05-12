@@ -3,8 +3,6 @@ import numpy as np
 import pygame
 
 
-
-
 class PerspectiveRenderer:
 
 
@@ -38,7 +36,7 @@ class PerspectiveRenderer:
         h = self.horizon + 1
         self.sky_pixels = np.zeros((self.iw, h, 3), dtype=np.uint8)
 
-        t = np.arange(h, dtype=np.float32) / max(h - 1, 1)  # 
+        t = np.arange(h, dtype=np.float32) / max(h - 1, 1)  
 
         r = (70 + 110 * t).astype(np.uint8)    
         g = (110 + 100 * t).astype(np.uint8)    

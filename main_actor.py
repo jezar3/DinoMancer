@@ -2,8 +2,8 @@ import math
 import pygame
 from enemies import applyHitFlash
 
-LEVEL_DAMAGE = {1: 0.2, 2: 1, 3: 2}
-XP_THRESHOLDS = {1: 100, 2: 400}
+LEVEL_DAMAGE = {1: 0.2, 2: 0.5, 3: 1, 4: 1.5, 5: 2}
+XP_THRESHOLDS = {1: 40, 2: 200, 3: 400, 4: 700}
 
 
 class Player:
@@ -24,12 +24,14 @@ class Player:
         self.hp = self.max_hp
         self.last_hit_time = -1000
         self.hitTime = -1000
+        self.pending_levelup = False
 
     def addXP(self, amount):
         self.xp += amount
-        if self.level < 3 and self.xp >= XP_THRESHOLDS[self.level]:
+        if self.level < 5 and self.xp >= XP_THRESHOLDS.get(self.level, 99999):
             self.level += 1
-            self.damage = LEVEL_DAMAGE[self.level]
+            self.damage = LEVEL_DAMAGE.get(self.level, self.damage)
+            self.pending_levelup = True
 
     def wasd(self, cam_angle=0):
         keys = pygame.key.get_pressed()
@@ -50,7 +52,6 @@ class Player:
         self.rect.x += int(round(forward * sin_a + strafe * cos_a))
         self.rect.y += int(round(-forward * cos_a + strafe * sin_a))
 
-        # Walk animation (2 frames)
         if moving:
             now = pygame.time.get_ticks()
             if now - self.walkTimer >= 333:

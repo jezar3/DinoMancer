@@ -16,7 +16,6 @@ class TileMap:
     def _get_chunk_trees(self, col, row):
         key = (col, row)
 
-        #avoid regeneration
         if key not in self.trees_by_chunk:
             
             rng = random.Random(col * 73856093 + row * 19349669)
@@ -26,18 +25,14 @@ class TileMap:
                 lx = rng.randint(0, self.chunk_size - 256)
                 ly = rng.randint(0, self.chunk_size - 256)
 
-                #world position
-                #for the empty list
                 trees.append((col * self.chunk_size + lx + 128, row * self.chunk_size + ly + 256))
             
 
             self.trees_by_chunk[key] = trees
-            #get key from the trees so it will only look for chunks w tree in it
             
         return self.trees_by_chunk[key]
 
     def get_trees_in_range(self, cx, cy, view_dist):
-        #small box
 
         c1 = int((cx - view_dist) // self.chunk_size) - 1
         c2 = int((cx + view_dist) // self.chunk_size) + 2

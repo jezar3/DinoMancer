@@ -1,17 +1,34 @@
 import math
 import pygame
 
-
-
-
 DASH_SPEED      = 250      
 DASH_DURATION   = 6      
 DASH_COOLDOWN   = 500    
 IFRAMES         = 4       
+GHOST_LIFETIME  = 18        
+GHOST_TINT      = (100, 60, 200)  
+
+
+def _make_ghost(image, alpha):
+    ghost = image.copy()
+    tint = pygame.Surface(ghost.get_size(), pygame.SRCALPHA)
+    tint.fill((*GHOST_TINT, 100))
+    ghost.blit(tint, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+    ghost.set_alpha(alpha)
+    return ghost
+
+
+class _Ghost:
+    __slots__ = ("world_x", "world_y", "image", "life")
+
+    def __init__(self, wx, wy, img, life):
+        self.world_x = wx
+        self.world_y = wy
+        self.image = img
+        self.life = life
 
 
 class Dash:
-   
 
     def __init__(self):
         self._active     = False
@@ -19,6 +36,7 @@ class Dash:
         self._dir_x       = 0.0        
         self._dir_y       = 0.0        
         self._last_dash   = -99999    
+        self._ghosts      = []         
 
 
     @property
@@ -27,16 +45,13 @@ class Dash:
 
     @property
     def is_invincible(self):
-        """True while the player is inside i-frames."""
         return self._active and self._frame < IFRAMES
 
     def try_activate(self, player, cam_angle):
-        """Call once when Q is *pressed* (not held). Starts a dash if off cooldown."""
         now = pygame.time.get_ticks()
         if self._active or now - self._last_dash < DASH_COOLDOWN:
             return
 
-       
         keys = pygame.key.get_pressed()
         fwd, strafe = 0.0, 0.0
         if keys[pygame.K_w]: fwd += 1
@@ -44,9 +59,8 @@ class Dash:
         if keys[pygame.K_d]: strafe += 1
         if keys[pygame.K_a]: strafe -= 1
         if fwd == 0 and strafe == 0:
-            fwd = 1  # default: dash forward
+            fwd = 1  
 
-        # Normalise and rotate by camera yaw (same maths as Player.wasd)
         length = math.hypot(fwd, strafe)
         fwd /= length
         strafe /= length
@@ -60,14 +74,27 @@ class Dash:
         self._last_dash = now
 
     def update(self, player):
-        """Call every frame. Moves the player while dashing."""
+        for g in self._ghosts:
+            g.life -= 1
+        self._ghosts = [g for g in self._ghosts if g.life > 0]
+
         if not self._active:
             return
 
-        # Move the player
+        alpha = int(180 * (1 - self._frame / DASH_DURATION))
+        ghost_img = _make_ghost(player.current_image, alpha)
+        self._ghosts.append(_Ghost(
+            player.rect.centerx, player.rect.centery,
+            ghost_img, GHOST_LIFETIME
+        ))
+
         player.rect.x += int(self._dir_x * DASH_SPEED)
         player.rect.y += int(self._dir_y * DASH_SPEED)
 
         self._frame += 1
         if self._frame >= DASH_DURATION:
             self._active = False
+
+    def get_ghost_render_objs(self):
+        return [{"world_x": g.world_x, "world_y": g.world_y, "image": g.image}
+                for g in self._ghosts]
