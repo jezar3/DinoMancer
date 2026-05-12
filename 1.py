@@ -188,7 +188,7 @@ def startMenu(window, clock):
         pygame.draw.rect(panel_bg, (0, 0, 0, 170), (0, 0, panel_w, panel_h), border_radius=10)
         pygame.draw.rect(panel_bg, (180, 140, 255, 90), (0, 0, panel_w, panel_h), 1, border_radius=10)
         window.blit(panel_bg, (panel_x, panel_y))
-        panel_title = ctrl_title_font.render("Game Mode", True, (255, 220, 80))
+        panel_title = ctrl_title_font.render("Pick Game add-ons", True, (255, 220, 80))
         window.blit(panel_title, (panel_x + panel_w // 2 - panel_title.get_width() // 2,
                                   panel_y + panel_pad - 2))
 
