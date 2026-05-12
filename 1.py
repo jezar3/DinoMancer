@@ -183,7 +183,6 @@ def startMenu(window, clock):
         txt.set_alpha(alpha)
         window.blit(txt, txt.get_rect(center=(sw // 2, sh - sh // 6)))
 
-        # ── Mode selector panel (right side) ──
         panel_bg = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
         pygame.draw.rect(panel_bg, (0, 0, 0, 170), (0, 0, panel_w, panel_h), border_radius=10)
         pygame.draw.rect(panel_bg, (180, 140, 255, 90), (0, 0, panel_w, panel_h), 1, border_radius=10)
@@ -192,10 +191,8 @@ def startMenu(window, clock):
         window.blit(panel_title, (panel_x + panel_w // 2 - panel_title.get_width() // 2,
                                   panel_y + panel_pad - 2))
 
-        # --- Helper to draw a mode card ---
         def _draw_card(rect, active, hovered, color_on, title_text, desc_text):
             pulse = 0.5 + 0.5 * math.sin(t * 0.005)
-            # background
             card_surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
             if active:
                 bg_a = int(70 + 30 * pulse)
@@ -205,12 +202,10 @@ def startMenu(window, clock):
             else:
                 card_surf.fill((255, 255, 255, 8))
             window.blit(card_surf, rect.topleft)
-            # border
             if active:
                 glow_a = int(180 + 75 * pulse)
                 border_col = (*color_on[:3], min(255, glow_a))
                 pygame.draw.rect(window, border_col, rect, 3, border_radius=8)
-                # outer glow ring
                 glow_rect = rect.inflate(6, 6)
                 glow_s = pygame.Surface((glow_rect.w, glow_rect.h), pygame.SRCALPHA)
                 pygame.draw.rect(glow_s, (*color_on[:3], int(40 * pulse)), (0, 0, glow_rect.w, glow_rect.h), 3, border_radius=10)
@@ -219,7 +214,6 @@ def startMenu(window, clock):
                 pygame.draw.rect(window, (220, 220, 240, 120), rect, 2, border_radius=8)
             else:
                 pygame.draw.rect(window, (100, 100, 120, 100), rect, 1, border_radius=8)
-            # checkmark box
             chk_sz = min(22, rect.h - 16)
             chk_bx = rect.x + 10
             chk_by = rect.centery - chk_sz // 2
@@ -234,12 +228,10 @@ def startMenu(window, clock):
                                  (chk_r.right - 4, chk_r.y + 4), 3)
             else:
                 pygame.draw.rect(window, (160, 160, 180) if hovered else (100, 100, 120), chk_r, 2, border_radius=4)
-            # title
             txt_x = chk_bx + chk_sz + 10
             t_col = color_on if active else ((240, 240, 250) if hovered else (190, 190, 200))
             title_s = card_font.render(title_text, True, t_col)
             window.blit(title_s, (txt_x, rect.y + 6))
-            # subtitle
             d_col = (*color_on[:3], 200) if active else (150, 150, 165)
             desc_s = sub_font.render(desc_text, True, d_col)
             window.blit(desc_s, (txt_x, rect.y + 6 + title_s.get_height() + 2))
@@ -322,8 +314,8 @@ while True:
     pygame.mixer.music.set_volume(0.67)
     pygame.mixer.music.play(-1)
 
-    player_speed = 36 if fast_mode else 12
-    player = Player(700, 700, player_speed)
+    player_speed = 100 if fast_mode else 12
+    player = Player(700, 700, player_speed, use_nmancer=fast_mode)
     slimes = []
     ghouls = []
 
@@ -466,6 +458,8 @@ while True:
         if len(slimes) + len(ghouls) < prevCount:
             sfx_death.play()
 
+        is_inv = dash_unlocked and dash.is_invincible
+
         diff_mult = runTimer.difficulty_mult()
 
         slimeTimer += 1
@@ -494,7 +488,6 @@ while True:
             ghouls.extend(newGhouls)
 
             if necromancer.cast_just_ended:
-                is_inv = dash_unlocked and dash.is_invincible
                 if not is_inv:
                     player.hp = max(0, player.hp - 1)
                     player.last_hit_time = pygame.time.get_ticks()
@@ -511,7 +504,6 @@ while True:
         for proj in necro_projectiles:
             proj.update()
             if proj.alive and proj.check_hit_player(player):
-                is_inv = dash_unlocked and dash.is_invincible
                 if not is_inv:
                     player.hp = max(0, player.hp - NECRO_PROJ_DAMAGE)
                     player.last_hit_time = pygame.time.get_ticks()
@@ -520,7 +512,8 @@ while True:
                         screenShake.trigger()
         necro_projectiles = [p for p in necro_projectiles if p.alive]
 
-        allEnemies = slimes + ghouls + ([necromancer] if necromancer else [])
+        all_enemies = slimes + ghouls
+        allEnemies = all_enemies + ([necromancer] if necromancer else [])
         kills = beam.update(player, allEnemies, camera, renderer, ammoSys)
 
         for enemy in kills:
@@ -552,20 +545,22 @@ while True:
             beam_channel.stop()
 
         now = pygame.time.get_ticks()
-        for enemy in slimes + ghouls:
-            if enemy.hp <= 0:
-                continue
-            dx = enemy.rect.centerx - player.rect.centerx
-            dy = enemy.rect.centery - player.rect.centery
-            if abs(dx) + abs(dy) > SLIME_HIT_RANGE * 2:
-                continue
-            dist = math.hypot(dx, dy)
-            is_inv = dash_unlocked and dash.is_invincible
-            if dist <= SLIME_HIT_RANGE and now - player.last_hit_time >= SLIME_HIT_COOLDOWN and not is_inv:
-                player.hp = max(0, player.hp - 1)
-                player.last_hit_time = now
-                player.hitTime = now
-                screenShake.trigger()
+        if not is_inv and now - player.last_hit_time >= SLIME_HIT_COOLDOWN:
+            hit_range_2 = SLIME_HIT_RANGE * 2
+            hit_range_sq = SLIME_HIT_RANGE * SLIME_HIT_RANGE
+            for enemy in all_enemies:
+                if enemy.hp <= 0:
+                    continue
+                dx = enemy.rect.centerx - player.rect.centerx
+                dy = enemy.rect.centery - player.rect.centery
+                if abs(dx) + abs(dy) > hit_range_2:
+                    continue
+                if dx * dx + dy * dy <= hit_range_sq:
+                    player.hp = max(0, player.hp - 1)
+                    player.last_hit_time = now
+                    player.hitTime = now
+                    screenShake.trigger()
+                    break
 
         window.fill((0, 0, 0))
         trees = tileMap.get_trees_in_range(camera.world_x, camera.world_y, TREE_VIEW_DISTANCE)
@@ -616,7 +611,7 @@ while True:
                         window.blit(rotated, rotated.get_rect(center=(int(cx), int(cy))))
 
         beam.draw(window)
-        beam.drawHealthBars(window, slimes + ghouls, camera, renderer)
+        beam.drawHealthBars(window, all_enemies, camera, renderer)
         beam.drawBossHp(window, necromancer)
         beam.drawXpBar(window, player)
         beam.drawPlayerHp(window, player)

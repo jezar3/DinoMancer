@@ -30,8 +30,12 @@ def applyHitFlash(image, hitTime):
 
 
 class Slime:
+    _shared_frames = None
+
     def __init__(self, x, y):
-        self.walkFrames = loadSheet("assets/enemies/bouncing_slime.png", 9, 1, (180, 180))
+        if Slime._shared_frames is None:
+            Slime._shared_frames = loadSheet("assets/enemies/bouncing_slime.png", 9, 1, (180, 180))
+        self.walkFrames = Slime._shared_frames
         self.frameIndex = 0.0
         self.current_image = self.walkFrames[0]
         self.rect = self.current_image.get_rect(topleft=(x, y))
@@ -54,11 +58,15 @@ class Slime:
             self.rect.y += round(dy / dist * 8)
 
 class Ghoul:
+    _shared_frames = None
+
     def __init__(self, x, y):
-        self.walkFrames = [
-            pygame.transform.scale(pygame.image.load(f"assets/enemies/ghoul/ghoul-running{i}.png").convert_alpha(), (180, 180))
-            for i in (1, 2)
-        ]
+        if Ghoul._shared_frames is None:
+            Ghoul._shared_frames = [
+                pygame.transform.scale(pygame.image.load(f"assets/enemies/ghoul/ghoul-running{i}.png").convert_alpha(), (180, 180))
+                for i in (1, 2)
+            ]
+        self.walkFrames = Ghoul._shared_frames
         self.frameIndex = 0.0
         self.current_image = self.walkFrames[0]
         self.rect = self.current_image.get_rect(topleft=(x, y))

@@ -13,7 +13,7 @@ class PerspectiveRenderer:
         self.sky = pygame.transform.scale(pygame.image.load("assets/sky.png").convert(), (width, height))
         self.ground = pygame.transform.scale(pygame.image.load("assets/ground.png").convert(), (width, height))
         self._scale_cache = {}
-        self._cache_limit = 512
+        self._cache_limit = 1024
 
     def setGround(self, path):
         self.ground = pygame.transform.scale(pygame.image.load(path).convert(), (self.width, self.height))
@@ -26,7 +26,7 @@ class PerspectiveRenderer:
         scaled = pygame.transform.scale(image, (w, h))
         if len(self._scale_cache) >= self._cache_limit:
             keys = list(self._scale_cache)
-            for k in keys[:len(keys) // 2]:
+            for k in keys[:len(keys) // 4]:
                 del self._scale_cache[k]
         self._scale_cache[key] = scaled
         return scaled

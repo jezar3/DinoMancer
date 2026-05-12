@@ -7,12 +7,22 @@ XP_THRESHOLDS = {1: 40, 2: 200, 3: 400, 4: 700}
 
 
 class Player:
-    def __init__(self, x, y, speed):
+    def __init__(self, x, y, speed, use_nmancer=False):
         self.speed = speed
-        self.image_left = pygame.transform.scale(
-            pygame.image.load("assets/running-Veritical/walking_up_left_leg.png").convert_alpha(), (180, 180))
-        self.image_right = pygame.transform.scale(
-            pygame.image.load("assets/running-Veritical/walking_up_right_leg.png").convert_alpha(), (180, 180))
+        self.use_nmancer = use_nmancer
+        if use_nmancer:
+            sprite_dir = "assets/Nmancer run"
+            self.image_left = pygame.transform.scale(
+                pygame.image.load(f"{sprite_dir}/walking_up_left_leg.png").convert_alpha(), (180, 180))
+            self.image_right = pygame.transform.scale(
+                pygame.image.load(f"{sprite_dir}/walking_up_right_leg.png").convert_alpha(), (180, 180))
+            self.walk_interval = 35
+        else:
+            self.image_left = pygame.transform.scale(
+                pygame.image.load("assets/running-Veritical/walking_up_left_leg.png").convert_alpha(), (180, 180))
+            self.image_right = pygame.transform.scale(
+                pygame.image.load("assets/running-Veritical/walking_up_right_leg.png").convert_alpha(), (180, 180))
+            self.walk_interval = 333
         self.walkIndex = 0
         self.walkTimer = 0
         self.current_image = self.image_left
@@ -54,7 +64,7 @@ class Player:
 
         if moving:
             now = pygame.time.get_ticks()
-            if now - self.walkTimer >= 333:
+            if now - self.walkTimer >= self.walk_interval:
                 self.walkTimer = now
                 self.walkIndex = 1 - self.walkIndex
         else:
