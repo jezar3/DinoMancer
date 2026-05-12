@@ -98,7 +98,6 @@ def startMenu(window, clock):
         ("E", "Switch Weapon"),
         ("R", "Reload"),
         ("T", "Unlock / Lock Mouse"),
-        ("Right Drag", "Rotate When Unlocked"),
         ("ESC", "Quit"),
     ]
 
