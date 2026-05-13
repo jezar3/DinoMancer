@@ -27,8 +27,8 @@ def _set_resource_cwd():
 _set_resource_cwd()
 
 TREE_VIEW_DISTANCE = 8000
-SLIME_HIT_RANGE = 100
-SLIME_HIT_COOLDOWN = 1000
+SLIME_HIT_RANGE = 200
+SLIME_HIT_COOLDOWN = 500
 HEALTH_DROP_CHANCE = 0.08
 
 WAVE_INTERVAL = 1800
@@ -71,13 +71,103 @@ def showText(window, clock, text, size, ms=2000, waitKey=False):
     start = pygame.time.get_ticks()
     while True:
         for e in pygame.event.get():
-            if e.type == pygame.QUIT or (e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE):
-                if waitKey: return
+            if e.type == pygame.QUIT:
                 pygame.quit(); raise SystemExit
+            if e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE:
+                if waitKey: return
         if not waitKey and pygame.time.get_ticks() - start >= ms:
             break
         window.fill((0, 0, 0))
         window.blit(rendered, rect)
+        pygame.display.flip()
+        clock.tick(60)
+
+
+def pauseMenu(window, clock):
+    """Returns 'resume', 'retry', or 'menu'."""
+    sw, sh = window.get_size()
+    background = window.copy()
+    overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 160))
+
+    title_font = pygame.font.SysFont("Monocraft", max(20, sw // 18))
+    btn_font = pygame.font.SysFont("Monocraft", max(14, sw // 32))
+    hint_font = pygame.font.SysFont("Monocraft", max(9, sw // 55))
+
+    buttons = [
+        ("Resume", "resume"),
+        ("Retry", "retry"),
+        ("Main Menu", "menu"),
+    ]
+    btn_w = max(200, sw // 3)
+    btn_h = max(44, sh // 10)
+    btn_gap = max(12, sh // 30)
+    total_h = len(buttons) * btn_h + (len(buttons) - 1) * btn_gap
+    start_y = sh // 2 - total_h // 2 + max(30, sh // 8)
+
+    btn_rects = []
+    for i in range(len(buttons)):
+        r = pygame.Rect(sw // 2 - btn_w // 2, start_y + i * (btn_h + btn_gap), btn_w, btn_h)
+        btn_rects.append(r)
+
+    selected = 0
+    while True:
+        mx, my = pygame.mouse.get_pos()
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT:
+                pygame.quit(); raise SystemExit
+            if e.type == pygame.KEYDOWN:
+                if e.key == pygame.K_ESCAPE:
+                    return "resume"
+                if e.key == pygame.K_UP:
+                    selected = (selected - 1) % len(buttons)
+                if e.key == pygame.K_DOWN:
+                    selected = (selected + 1) % len(buttons)
+                if e.key == pygame.K_RETURN:
+                    return buttons[selected][1]
+            if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
+                for i, r in enumerate(btn_rects):
+                    if r.collidepoint(e.pos):
+                        return buttons[i][1]
+            if e.type == pygame.MOUSEMOTION:
+                for i, r in enumerate(btn_rects):
+                    if r.collidepoint(mx, my):
+                        selected = i
+
+        t = pygame.time.get_ticks()
+        window.blit(background, (0, 0))
+        window.blit(overlay, (0, 0))
+
+        pulse = 0.5 + 0.5 * math.sin(t * 0.004)
+        title = title_font.render("PAUSED", True, (255, 255, 255))
+        title.set_alpha(int(180 + 75 * pulse))
+        window.blit(title, title.get_rect(center=(sw // 2, start_y - max(50, sh // 7))))
+
+        for i, (label, _) in enumerate(buttons):
+            r = btn_rects[i]
+            hovered = r.collidepoint(mx, my)
+            is_sel = i == selected or hovered
+            if is_sel:
+                selected = i
+
+            btn_surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+            if is_sel:
+                glow = int(40 + 25 * pulse)
+                btn_surf.fill((140, 100, 255, glow))
+            else:
+                btn_surf.fill((255, 255, 255, 10))
+            window.blit(btn_surf, r.topleft)
+
+            bdr = (180, 140, 255, 200) if is_sel else (100, 100, 120, 100)
+            pygame.draw.rect(window, bdr, r, 2, border_radius=8)
+
+            col = (255, 255, 255) if is_sel else (170, 170, 180)
+            lbl = btn_font.render(label, True, col)
+            window.blit(lbl, lbl.get_rect(center=r.center))
+
+        hint = hint_font.render("Press ESC to resume", True, (140, 140, 160))
+        window.blit(hint, hint.get_rect(center=(sw // 2, btn_rects[-1].bottom + max(20, sh // 15))))
+
         pygame.display.flip()
         clock.tick(60)
 
@@ -98,7 +188,7 @@ def startMenu(window, clock):
         ("E", "Switch Weapon"),
         ("R", "Reload"),
         ("T", "Unlock / Lock Mouse"),
-        ("ESC", "Quit"),
+        ("ESC", "Pause"),
     ]
 
     ctrl_pad = 14
@@ -378,8 +468,18 @@ while True:
     while running:
         if skillPicker.active:
             for event in pygame.event.get():
-                if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+                if event.type == pygame.QUIT:
                     pygame.quit(); raise SystemExit
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    pause_choice = pauseMenu(window, clock)
+                    if pause_choice == "retry":
+                        running = False
+                        _pause_action = "retry"
+                        break
+                    elif pause_choice == "menu":
+                        running = False
+                        _pause_action = "menu"
+                        break
                 chosen = skillPicker.handle_event(event, skill_card_rects)
                 if chosen:
                     result = skillPicker.apply_skill(chosen, player, dash, ammoSys)
@@ -415,8 +515,16 @@ while True:
             tileMap.setTreeImage("assets/world assets/magical_spruce_tree.png")
 
         for event in pygame.event.get():
-            if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+            if event.type == pygame.QUIT:
                 pygame.quit(); raise SystemExit
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                pause_result = pauseMenu(window, clock)
+                if pause_result == "retry":
+                    running = False
+                    break
+                elif pause_result == "menu":
+                    running = False
+                    break
             if event.type == pygame.KEYDOWN and event.key == pygame.K_q:
                 if dash_unlocked:
                     dash.try_activate(player, camera.camYAW)

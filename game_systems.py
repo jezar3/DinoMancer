@@ -13,9 +13,9 @@ def _make_circle_surf(radius, color, glow_color=None):
     pygame.draw.circle(surf, (255, 255, 255, 120), (cx - radius // 3, cy - radius // 3), radius // 3)
     return surf
 
-ORB_MAGNET_RANGE = 400
-ORB_SPEED = 6
-ORB_XP_VALUE = 5
+ORB_MAGNET_RANGE = 2000
+ORB_SPEED = 30
+ORB_XP_VALUE = 10
 
 class XPOrb:
     _sprite = None
@@ -434,10 +434,6 @@ class SkillPicker:
             card_rects.append(rect)
 
             card = pygame.transform.scale(self._card_img, (card_w, card_h))
-            if i == self._hovered:
-                bright = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
-                bright.fill((255, 255, 255, 40))
-                card.blit(bright, (0, 0))
             window.blit(card, (x, y))
 
             name_surf = self._font.render(info["name"], True, info["color"])

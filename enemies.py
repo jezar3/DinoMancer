@@ -34,12 +34,12 @@ class Slime:
 
     def __init__(self, x, y):
         if Slime._shared_frames is None:
-            Slime._shared_frames = loadSheet("assets/enemies/bouncing_slime.png", 9, 1, (180, 180))
+            Slime._shared_frames = loadSheet("assets/enemies/bouncing_slime.png", 9, 1, (320, 320))
         self.walkFrames = Slime._shared_frames
         self.frameIndex = 0.0
         self.current_image = self.walkFrames[0]
         self.rect = self.current_image.get_rect(topleft=(x, y))
-        self.max_hp = self.hp = 3
+        self.max_hp = self.hp = 2
         self.last_beam_damage_time = self.hitTime = -1000
 
     def take_damage(self, dmg):

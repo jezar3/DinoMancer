@@ -3,7 +3,7 @@ import random
 import pygame
 
 
-SHAKE_INTENSITY = 8       
+SHAKE_INTENSITY = 10       
 SHAKE_DURATION  = 300     
 
 

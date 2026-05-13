@@ -3,10 +3,10 @@ import pygame
 
 ATTACK_FRAME_TIME = 80
 BEAM_DAMAGE_COOLDOWN = 250
-BEAM_DAMAGE_MULTIPLIER = 0.2
-BULLET_FIRE_COOLDOWN = 500
-BULLET_DAMAGE_PER_LEVEL = {1: 0.5, 2: 1.0, 3: 1.5, 4: 2.0, 5: 3.0}
-BULLET_SPEED = 14
+BEAM_DAMAGE_MULTIPLIER = 0.8
+BULLET_FIRE_COOLDOWN = 1000
+BULLET_DAMAGE_PER_LEVEL = {1: 2.5, 2: 4.5, 3: 6.0, 4: 8.0, 5: 10.0}
+BULLET_SPEED = 17
 BULLET_LIFETIME = 90
 BULLET_SCALE = 1.25
 
@@ -47,9 +47,11 @@ def distToLine(px, py, lineX1, lineY1, lineX2, lineY2):
 
 class Bullet:
    
-    def __init__(self, sx, sy, dir_x, dir_y, image, angle, damage):
+    def __init__(self, sx, sy, dir_x, dir_y, image, angle, damage, target_dist=None):
         self.sx = float(sx)
         self.sy = float(sy)
+        self.start_x = float(sx)
+        self.start_y = float(sy)
         self.dir_x = dir_x
         self.dir_y = dir_y
         self.angle = angle
@@ -57,8 +59,8 @@ class Bullet:
             pygame.transform.scale(image, (int(image.get_width() * BULLET_SCALE),
                                            int(image.get_height() * BULLET_SCALE))),
             -angle)
-        self.lifetime = BULLET_LIFETIME
-        self.max_lifetime = BULLET_LIFETIME
+        self.target_dist = target_dist if target_dist else BULLET_SPEED * BULLET_LIFETIME
+        self.traveled = 0.0
         self.alive = True
         self.hit_enemies = set()
         self.damage = damage
@@ -66,8 +68,8 @@ class Bullet:
     def update(self):
         self.sx += self.dir_x * BULLET_SPEED
         self.sy += self.dir_y * BULLET_SPEED
-        self.lifetime -= 1
-        if self.lifetime <= 0:
+        self.traveled += BULLET_SPEED
+        if self.traveled >= self.target_dist:
             self.alive = False
 
     def check_hit(self, enemies, kill_list, camera, renderer):
@@ -90,11 +92,13 @@ class Bullet:
         return False
 
     def draw(self, window):
-        t = 1.0 - (self.lifetime / self.max_lifetime)
-        scale = max(0.3, 1.0 - t * 0.7)
+        t = min(1.0, self.traveled / max(1, self.target_dist))
+        scale = max(0.15, 1.0 - t * 0.85)
         w = max(2, int(self.base_image.get_width() * scale))
         h = max(2, int(self.base_image.get_height() * scale))
         scaled = pygame.transform.scale(self.base_image, (w, h))
+        alpha = max(30, int(255 * (1.0 - t * 0.8)))
+        scaled.set_alpha(alpha)
         rect = scaled.get_rect(center=(int(self.sx), int(self.sy)))
         window.blit(scaled, rect)
 
@@ -191,13 +195,14 @@ class BeamAttack:
         muzzle = max(20, min(60, playerScreenPos["scale"] * 20))
         start_x = px + dir_x * muzzle
         start_y = py + dir_y * muzzle
+        target_dist = math.hypot(mx - start_x, my - start_y)
 
         self.lastBulletTime = now
         if ammo_sys:
             ammo_sys.consume()
         dmg = BULLET_DAMAGE_PER_LEVEL.get(player.level, 0.5)
         self.bullets.append(Bullet(start_x, start_y, dir_x, dir_y,
-                                   self.bulletImage, angle, dmg))
+                                   self.bulletImage, angle, dmg, target_dist))
 
     def _updateBeam(self, player, enemies, camera, renderer, kills):
         now = pygame.time.get_ticks()
