@@ -336,21 +336,39 @@ class SkillPicker:
         self._font_sm = None
         self._game_snapshot = None
         self._hovered = -1
+        self._opened_at = 0
+        self._sparkles = []
 
     def _load_card(self):
         if self._card_img is None:
             raw = pygame.image.load("assets/ui/choice option.png").convert_alpha()
+            raw.lock()
             for y in range(raw.get_height()):
                 for x in range(raw.get_width()):
                     r, g, b, a = raw.get_at((x, y))
                     if r + g + b < 40:
                         raw.set_at((x, y), (0, 0, 0, 0))
+            raw.unlock()
             self._card_img = raw
+
+    def preload(self):
+        self._load_card()
 
     def open(self, player_has_bullet, player_has_dash, game_surface=None):
         self._load_card()
         if game_surface is not None:
             self._game_snapshot = game_surface.copy()
+        self._opened_at = pygame.time.get_ticks()
+        self._sparkles = [
+            (
+                random.random(),
+                random.random(),
+                random.uniform(0.012, 0.045),
+                random.randint(1, 3),
+                random.uniform(0, math.tau),
+            )
+            for _ in range(46)
+        ]
         pool = []
         pool.append("speed_up")
         pool.append("attack_up")
@@ -407,15 +425,33 @@ class SkillPicker:
             self._font_sm = pygame.font.SysFont("Monocraft", max(8, window.get_width() // 65))
 
         sw, sh = window.get_size()
+        now = pygame.time.get_ticks()
+        open_t = max(0, now - self._opened_at)
 
         if self._game_snapshot is not None:
             window.blit(self._game_snapshot, (0, 0))
         dim = pygame.Surface((sw, sh), pygame.SRCALPHA)
-        dim.fill((0, 0, 0, 140))
+        dim.fill((0, 0, 0, 125))
         window.blit(dim, (0, 0))
 
+        aura = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        pulse = 0.5 + 0.5 * math.sin(now * 0.005)
+        center = (sw // 2, sh // 2)
+        for i, radius in enumerate((90, 150, 220)):
+            rr = int(radius + pulse * 18 + i * math.sin(now * 0.002 + i) * 7)
+            pygame.draw.circle(aura, (120, 170, 255, 18 + i * 8), center, rr, 2)
+
+        for nx, ny, speed, size, phase in self._sparkles:
+            x = int((nx * sw + math.sin(now * 0.0015 + phase) * 18) % sw)
+            y = int((ny * sh - open_t * speed) % (sh + 60) - 30)
+            alpha = int(75 + 75 * (0.5 + 0.5 * math.sin(now * 0.006 + phase)))
+            pygame.draw.circle(aura, (180, 220, 255, alpha), (x, y), size)
+
+        window.blit(aura, (0, 0))
+
         title = self._font.render("Choose an Upgrade", True, (255, 230, 80))
-        window.blit(title, title.get_rect(center=(sw // 2, sh // 6)))
+        title_y = sh // 6 + int(math.sin(now * 0.004) * 4)
+        window.blit(title, title.get_rect(center=(sw // 2, title_y)))
 
         card_w = min(280, sw // 4)
         card_h = int(card_w * 0.48)
@@ -428,20 +464,27 @@ class SkillPicker:
         for i, skill_id in enumerate(self.choices):
             info = SKILL_DEFS[skill_id]
             x = start_x + i * (card_w + gap)
-            y = cy - card_h // 2
+            y = cy - card_h // 2 + int(math.sin(now * 0.004 + i * 1.7) * 5)
 
             rect = pygame.Rect(x, y, card_w, card_h)
             card_rects.append(rect)
 
             card = pygame.transform.scale(self._card_img, (card_w, card_h))
-            window.blit(card, (x, y))
+            window.blit(card, rect.topleft)
 
+            icon_x = rect.x + max(22, rect.w // 10)
+            icon_y = rect.y + rect.h // 2
+            pygame.draw.circle(window, (20, 20, 30), (icon_x, icon_y), 13)
+            pygame.draw.circle(window, info["color"], (icon_x, icon_y), 10)
+            pygame.draw.circle(window, (255, 255, 255), (icon_x - 3, icon_y - 3), 3)
+
+            text_cx = rect.x + rect.w // 2 + max(8, rect.w // 18)
             name_surf = self._font.render(info["name"], True, info["color"])
-            name_r = name_surf.get_rect(center=(x + card_w // 2, y + card_h // 3))
+            name_r = name_surf.get_rect(center=(text_cx, rect.y + rect.h // 3))
             window.blit(name_surf, name_r)
 
             desc_surf = self._font_sm.render(info["desc"], True, (220, 220, 220))
-            desc_r = desc_surf.get_rect(center=(x + card_w // 2, y + card_h * 2 // 3))
+            desc_r = desc_surf.get_rect(center=(text_cx, rect.y + rect.h * 2 // 3))
             window.blit(desc_surf, desc_r)
 
         return card_rects

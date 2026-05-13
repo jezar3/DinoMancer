@@ -9,7 +9,7 @@ from main_actor import Player
 from renderer import PerspectiveRenderer
 from skills import Dash
 from tilemap import TileMap
-from effects import ScreenShake, LevelUpFlash
+from effects import ScreenShake, LevelUpFlash, WorldVFX
 from game_systems import (
     XPOrb, LargeXPOrb, HealthPickup, WaveAnnouncer, KillStreak,
     AmmoSystem, RunTimer, DynamicLighting,
@@ -34,7 +34,7 @@ HEALTH_DROP_CHANCE = 0.08
 WAVE_INTERVAL = 1800
 TOTAL_WAVES = 25
 GHOUL_START_WAVE = 5
-BOSS_SPAWN_WAVE = 20
+BOSS_SPAWN_WAVE = 12
 
 NECRO_FIRE_INTERVAL = 150
 
@@ -209,18 +209,15 @@ def startMenu(window, clock):
     
     card_w = max(200, sw // 4)
     card_h = max(56, sh // 8)
-    card_gap = 12
     panel_pad = 16
     panel_w = card_w + panel_pad * 2
-    panel_h = card_h * 2 + card_gap + panel_pad * 2 + max(16, sh // 24)
+    panel_h = card_h + panel_pad * 2 + max(16, sh // 24)
     panel_x = sw - panel_w - 16
     panel_y = sh // 2 - panel_h // 2
 
     card_x = panel_x + panel_pad
-    fast_card_y = panel_y + panel_pad + max(16, sh // 24)
-    jesus_card_y = fast_card_y + card_h + card_gap
-    chk_rect_fast = pygame.Rect(card_x, fast_card_y, card_w, card_h)
-    chk_rect_jesus = pygame.Rect(card_x, jesus_card_y, card_w, card_h)
+    god_card_y = panel_y + panel_pad + max(16, sh // 24)
+    chk_rect_god = pygame.Rect(card_x, god_card_y, card_w, card_h)
 
     particles = []
     for _ in range(25):
@@ -240,10 +237,8 @@ def startMenu(window, clock):
             if e.type == pygame.KEYDOWN and e.key == pygame.K_RETURN:
                 return selected_mode
             if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
-                if chk_rect_jesus.collidepoint(e.pos):
-                    selected_mode = None if selected_mode == "jesus" else "jesus"
-                elif chk_rect_fast.collidepoint(e.pos):
-                    selected_mode = None if selected_mode == "fast" else "fast"
+                if chk_rect_god.collidepoint(e.pos):
+                    selected_mode = None if selected_mode == "god" else "god"
 
         t = pygame.time.get_ticks()
         window.blit(bg, (0, 0))
@@ -326,19 +321,12 @@ def startMenu(window, clock):
             desc_s = sub_font.render(desc_text, True, d_col)
             window.blit(desc_s, (txt_x, rect.y + 6 + title_s.get_height() + 2))
 
-        fast_hovered = chk_rect_fast.collidepoint(mx, my)
-        jesus_hovered = chk_rect_jesus.collidepoint(mx, my)
+        god_hovered = chk_rect_god.collidepoint(mx, my)
 
-        _draw_card(chk_rect_fast,
-                   selected_mode == "fast", fast_hovered,
-                   (60, 200, 255),
-                   "N-mancer",""
-                   )
-
-        _draw_card(chk_rect_jesus,
-                   selected_mode == "jesus", jesus_hovered,
+        _draw_card(chk_rect_god,
+                   selected_mode == "god", god_hovered,
                    (255, 220, 60),
-                   "JESUS Mode", "")
+                   "God Mode", "")
 
         pygame.display.flip()
         clock.tick(60)
@@ -397,15 +385,13 @@ while True:
     pygame.mixer.music.stop()
     pygame.mixer.stop()
     selected_mode = startMenu(window, clock)
-    god_mode = selected_mode == "jesus"
-    fast_mode = selected_mode == "fast"
+    god_mode = selected_mode == "god"
 
     pygame.mixer.music.load("assets/Necromancer/SFX/before_boss_themesong.mp3")
     pygame.mixer.music.set_volume(0.67)
     pygame.mixer.music.play(-1)
 
-    player_speed = 100 if fast_mode else 12
-    player = Player(700, 700, player_speed, use_nmancer=fast_mode)
+    player = Player(700, 700, 12)
     slimes = []
     ghouls = []
 
@@ -425,6 +411,7 @@ while True:
     dash_unlocked = False
     screenShake = ScreenShake()
     levelUpFlash = LevelUpFlash()
+    vfx = WorldVFX()
     necroFireTimer = 0
 
     waveAnnouncer = WaveAnnouncer()
@@ -433,6 +420,7 @@ while True:
     runTimer = RunTimer()
     lighting = DynamicLighting(sw, sh)
     skillPicker = SkillPicker()
+    skillPicker.preload()
     mapDecos = MapDecorations()
     currentWave = 0
 
@@ -489,7 +477,9 @@ while True:
                     elif result == "unlock_dash":
                         dash_unlocked = True
                     levelUpFlash.trigger()
+                    vfx.level_up(player.rect.centerx, player.rect.centery)
             skill_card_rects = skillPicker.draw(window)
+            levelUpFlash.draw(window)
             pygame.display.flip()
             clock.tick(60)
             continue
@@ -508,6 +498,8 @@ while True:
             necromancer = Necromancer(
                 player.rect.centerx + 2000,
                 player.rect.centery + 2000)
+            vfx.boss_spawn(necromancer.rect.centerx, necromancer.rect.centery)
+            screenShake.trigger()
             pygame.mixer.music.load("assets/Necromancer/SFX/boss_appear_theme.mp3")
             pygame.mixer.music.set_volume(1.0)
             pygame.mixer.music.play(-1)
@@ -559,6 +551,7 @@ while True:
             dash.update(player)
         camera.update(player)
         ammoSys.update()
+        vfx.update()
 
         prevCount = len(slimes) + len(ghouls)
         slimes = [s for s in slimes if s.hp > 0]
@@ -611,6 +604,8 @@ while True:
 
         for proj in necro_projectiles:
             proj.update()
+            if proj.alive:
+                vfx.projectile_trail(proj.x, proj.y)
             if proj.alive and proj.check_hit_player(player):
                 if not is_inv:
                     player.hp = max(0, player.hp - NECRO_PROJ_DAMAGE)
@@ -625,6 +620,7 @@ while True:
         kills = beam.update(player, allEnemies, camera, renderer, ammoSys)
 
         for enemy in kills:
+            vfx.death_burst(enemy.rect.centerx, enemy.rect.centery, boss=enemy is necromancer)
             xp_orbs.append(XPOrb(enemy.rect.centerx, enemy.rect.centery))
             killStreak.register_kill()
             if random.random() < HEALTH_DROP_CHANCE:
@@ -635,15 +631,18 @@ while True:
         for orb in xp_orbs:
             gained = orb.update(player)
             if gained > 0:
+                vfx.xp_pickup(orb.x, orb.y)
                 player.addXP(gained)
         xp_orbs = [o for o in xp_orbs if o.alive]
 
         for hp in health_pickups:
-            hp.update(player)
+            if hp.update(player):
+                vfx.heal_pickup(hp.x, hp.y)
         health_pickups = [hp for hp in health_pickups if hp.alive]
 
         if player.pending_levelup:
             player.pending_levelup = False
+            levelUpFlash.trigger()
             skillPicker.open(beam.has_bullet, dash_unlocked, window)
 
         if beam.weaponMode == "beam" and beam.isAttacking:
@@ -690,6 +689,7 @@ while True:
         playerSP = getScreenPos(player, camera, renderer)
         if playerSP:
             lighting.draw(window, playerSP["x"], playerSP["y"])
+        vfx.draw_world(window, camera, renderer)
 
         if necromancer and necromancer.isCasting and necromancer.hp > 0:
             necro_sp = getScreenPos(necromancer, camera, renderer)
