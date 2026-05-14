@@ -104,7 +104,7 @@ class Bullet:
 
 
 class BeamAttack:
-    def __init__(self):
+    def __init__(self, bullet_sound=None, bullet_channel=None):
         self.levelFrames = {}
         lv1 = loadFrames([f"assets/attacks/level 1 beam/LaserShot{i}.png" for i in range(1, 4)])
         self.levelFrames[1] = {"intro": lv1[:2], "loop": lv1}
@@ -135,6 +135,8 @@ class BeamAttack:
         self.has_bullet = False
         self.bullets: list[Bullet] = []
         self.lastBulletTime = 0
+        self.bullet_sound = bullet_sound
+        self.bullet_channel = bullet_channel
 
     def reset(self):
         self.isAttacking = self.isLooping = False
@@ -203,6 +205,11 @@ class BeamAttack:
         dmg = BULLET_DAMAGE_PER_LEVEL.get(player.level, 0.5)
         self.bullets.append(Bullet(start_x, start_y, dir_x, dir_y,
                                    self.bulletImage, angle, dmg, target_dist))
+        if self.bullet_sound:
+            if self.bullet_channel:
+                self.bullet_channel.play(self.bullet_sound)
+            else:
+                self.bullet_sound.play()
 
     def _updateBeam(self, player, enemies, camera, renderer, kills):
         now = pygame.time.get_ticks()

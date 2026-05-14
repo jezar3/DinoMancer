@@ -347,6 +347,7 @@ def spawnPos(player):
 
 pygame.init()
 pygame.mixer.init()
+pygame.mixer.set_num_channels(16)
 window = createFullscreenWindow()
 sw, sh = window.get_size()
 clock = pygame.time.Clock()
@@ -378,7 +379,13 @@ def setMouseLock(locked, center=None):
 sfx_casting = pygame.mixer.Sound("assets/Necromancer/SFX/necromancer_casting.mp3")
 sfx_death = pygame.mixer.Sound("assets/enemies/slime-SFX/slime_death.mp3")
 sfx_beam = pygame.mixer.Sound("assets/attacks/beam-SFX/beam.mp3")
+attack_sfx_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "attacks", "bullet.mp3")
+sfx_bullet = pygame.mixer.Sound(attack_sfx_path)
+sfx_dash = pygame.mixer.Sound(attack_sfx_path)
 beam_channel = pygame.mixer.Channel(1)
+necro_beam_channel = pygame.mixer.Channel(2)
+bullet_channel = pygame.mixer.Channel(3)
+dash_channel = pygame.mixer.Channel(4)
 
 while True:
     setMouseLock(False)
@@ -406,7 +413,7 @@ while True:
     tileMap = TileMap()
     camera = Camera(sw, sh)
     renderer = PerspectiveRenderer(sw, sh)
-    beam = BeamAttack()
+    beam = BeamAttack(sfx_bullet, bullet_channel)
     dash = Dash()
     dash_unlocked = False
     screenShake = ScreenShake()
@@ -519,7 +526,7 @@ while True:
                     break
             if event.type == pygame.KEYDOWN and event.key == pygame.K_q:
                 if dash_unlocked:
-                    dash.try_activate(player, camera.camYAW)
+                    dash.try_activate(player, camera.camYAW, sfx_dash, dash_channel)
             if event.type == pygame.KEYDOWN and event.key == pygame.K_t:
                 mouseLocked = not mouseLocked
                 setMouseLock(mouseLocked, mouseLockCenter)
@@ -650,6 +657,12 @@ while True:
                 beam_channel.play(sfx_beam, loops=-1)
         else:
             beam_channel.stop()
+
+        if necromancer and necromancer.isCasting and necromancer.hp > 0:
+            if not necro_beam_channel.get_busy():
+                necro_beam_channel.play(sfx_beam, loops=-1)
+        else:
+            necro_beam_channel.stop()
 
         now = pygame.time.get_ticks()
         if not is_inv and now - player.last_hit_time >= SLIME_HIT_COOLDOWN:

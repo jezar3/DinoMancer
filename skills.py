@@ -47,7 +47,7 @@ class Dash:
     def is_invincible(self):
         return self._active and self._frame < IFRAMES
 
-    def try_activate(self, player, cam_angle):
+    def try_activate(self, player, cam_angle, dash_sound=None, dash_channel=None):
         now = pygame.time.get_ticks()
         if self._active or now - self._last_dash < DASH_COOLDOWN:
             return
@@ -72,6 +72,11 @@ class Dash:
         self._active = True
         self._frame = 0
         self._last_dash = now
+        if dash_sound:
+            if dash_channel:
+                dash_channel.play(dash_sound)
+            else:
+                dash_sound.play()
 
     def update(self, player):
         for g in self._ghosts:
