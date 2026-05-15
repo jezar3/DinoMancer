@@ -8,7 +8,7 @@ class PerspectiveRenderer:
         self.height = height
 
         self.camera_height = 300
-        self.fov = 300
+        self.fov = 305
         self.horizon = int(height * 0.35)
         self.sky = pygame.transform.scale(pygame.image.load("assets/sky.png").convert(), (width, height))
         self.ground = pygame.transform.scale(pygame.image.load("assets/ground.png").convert(), (width, height))

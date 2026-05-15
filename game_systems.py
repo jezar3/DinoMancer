@@ -43,29 +43,53 @@ class XPOrb:
         return {"world_x": self.x, "world_y": self.y, "image": self.image}
 
 
-HEAL_AMOUNT = 2
+HEAL_AMOUNT = 1   # reduced from 2 – HP recovery should feel valuable
 
 class HealthPickup:
+    """HP pickup using the hp.png sprite with floating bob + glow."""
     _sprite = None
+    _glow = None
 
     def __init__(self, x, y):
         if HealthPickup._sprite is None:
-            HealthPickup._sprite = _make_circle_surf(16, (220, 50, 50), (200, 30, 30))
-        self.image = HealthPickup._sprite
+            raw = pygame.image.load("assets/world assets/hp.png").convert_alpha()
+            HealthPickup._sprite = pygame.transform.scale(raw, (64, 64))
+            # Build glow halo
+            glow_size = 96
+            glow = pygame.Surface((glow_size, glow_size), pygame.SRCALPHA)
+            cx, cy = glow_size // 2, glow_size // 2
+            for r in range(glow_size // 2, 8, -1):
+                a = max(0, int(50 * (1 - r / (glow_size // 2))))
+                pygame.draw.circle(glow, (255, 60, 60, a), (cx, cy), r)
+            HealthPickup._glow = glow
+        self.base_image = HealthPickup._sprite
+        self.glow_image = HealthPickup._glow
         self.x, self.y = float(x), float(y)
         self.alive = True
+        self._spawn_time = pygame.time.get_ticks()
 
     def update(self, player):
         dx = player.rect.centerx - self.x
         dy = player.rect.centery - self.y
-        if math.hypot(dx, dy) < 50:
+        if math.hypot(dx, dy) < 55:
             self.alive = False
             player.hp = min(player.max_hp, player.hp + HEAL_AMOUNT)
             return True
         return False
 
     def get_render_obj(self):
-        return {"world_x": self.x, "world_y": self.y, "image": self.image}
+        # Bobbing animation
+        t = pygame.time.get_ticks()
+        bob = math.sin((t - self._spawn_time) * 0.004) * 12
+        return {"world_x": self.x, "world_y": self.y + bob, "image": self.base_image}
+
+    def get_glow_render_obj(self):
+        t = pygame.time.get_ticks()
+        bob = math.sin((t - self._spawn_time) * 0.004) * 12
+        pulse = 0.7 + 0.3 * math.sin(t * 0.006)
+        size = int(96 * pulse)
+        glow = pygame.transform.scale(self.glow_image, (size, size))
+        return {"world_x": self.x, "world_y": self.y + bob, "image": glow}
 
 
 LARGE_ORB_XP = 20
@@ -229,12 +253,16 @@ class AmmoSystem:
             window.blit(txt, (x - dot_r, y + 14))
 
 
+# ---- Difficulty tiers (unchanged core, used by RunTimer) ----
 DIFFICULTY_TIERS = [
     (0,    1.0),
     (60,   1.3),
     (120,  1.7),
     (180,  2.2),
     (240,  3.0),
+    (360,  3.8),
+    (480,  4.5),
+    (600,  5.0),
 ]
 
 class RunTimer:
@@ -251,7 +279,12 @@ class RunTimer:
         for threshold, m in DIFFICULTY_TIERS:
             if t >= threshold:
                 mult = m
-        return mult
+        # Beyond last tier: continue growing slowly (logarithmic)
+        last_t, last_m = DIFFICULTY_TIERS[-1]
+        if t > last_t:
+            extra = math.log2(max(1, (t - last_t) / 120 + 1))
+            mult = last_m + extra
+        return min(mult, 15.0)   # hard cap to prevent overflow
 
     def draw(self, window):
         if self._font is None:
@@ -321,9 +354,19 @@ SKILL_DEFS = {
         "color": (120, 255, 120),
         "unique": False,
     },
+    "max_hp_up": {
+        "name": "Vitality",
+        "desc": "Max HP +1",
+        "color": (255, 80, 80),
+        "unique": False,
+    },
+    "heal": {
+        "name": "Field Medic",
+        "desc": "Heal 2 HP now",
+        "color": (80, 255, 160),
+        "unique": False,
+    },
 }
-
-XP_THRESHOLDS = {1: 40, 2: 200, 3: 400, 4: 700}
 
 class SkillPicker:
 
@@ -373,6 +416,8 @@ class SkillPicker:
         pool.append("speed_up")
         pool.append("attack_up")
         pool.append("clip_size_up")
+        pool.append("max_hp_up")
+        pool.append("heal")
         if "bullet_attack" not in self._acquired_uniques and not player_has_bullet:
             pool.append("bullet_attack")
         if "dash" not in self._acquired_uniques and not player_has_dash:
@@ -415,6 +460,11 @@ class SkillPicker:
         elif skill_id == "clip_size_up":
             ammo_sys.clip_size += 2
             ammo_sys.ammo = ammo_sys.clip_size
+        elif skill_id == "max_hp_up":
+            player.max_hp += 1
+            player.hp = min(player.max_hp, player.hp + 1)
+        elif skill_id == "heal":
+            player.hp = min(player.max_hp, player.hp + 2)
         return None
 
     def draw(self, window):

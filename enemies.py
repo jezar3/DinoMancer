@@ -5,6 +5,7 @@ import pygame
 
 FLASH_DURATION = 420
 
+
 def loadSheet(path, cols, rows, size):
     sheet = pygame.image.load(path).convert_alpha()
     fw, fh = sheet.get_width() // cols, sheet.get_height() // rows
@@ -47,15 +48,18 @@ class Slime:
         self.hitTime = pygame.time.get_ticks()
 
     def update(self, player):
-        if self.hp <= 0: return
+        if self.hp <= 0:
+            return
         dx = player.rect.centerx - self.rect.centerx
         dy = player.rect.centery - self.rect.centery
         dist = math.hypot(dx, dy)
         self.frameIndex = (self.frameIndex + 0.2) % len(self.walkFrames)
         self.current_image = applyHitFlash(self.walkFrames[int(self.frameIndex)], self.hitTime)
         if dist > 8:
-            self.rect.x += round(dx / dist * 8)
-            self.rect.y += round(dy / dist * 8)
+            speed = 5
+            self.rect.x += round(dx / dist * speed)
+            self.rect.y += round(dy / dist * speed)
+
 
 class Ghoul:
     _shared_frames = None
@@ -79,7 +83,8 @@ class Ghoul:
         self.hitTime = pygame.time.get_ticks()
 
     def update(self, player):
-        if self.hp <= 0: return
+        if self.hp <= 0:
+            return
         dx = player.rect.centerx - self.rect.centerx
         dy = player.rect.centery - self.rect.centery
         dist = math.hypot(dx, dy)
@@ -88,14 +93,56 @@ class Ghoul:
         if dist > 8:
             speed = 16
             now = pygame.time.get_ticks()
-            if now - self.lastDashTime >= 2000:
+            if now - self.lastDashTime >= 1600:
                 self.lastDashTime = now
-                speed = 40
+                speed = 44
             self.rect.x += round(dx / dist * speed)
             self.rect.y += round(dy / dist * speed)
 
 
+# ---------------------------------------------------------------------------
+# TreeMob  –  debuff enemy (wave 6+)
+# ---------------------------------------------------------------------------
+TREE_MOB_DEBUFF_DURATION_MS = 2000
+TREE_MOB_IMMUNITY_MS = 4000        # immunity window after being affected
+TREE_MOB_HIT_RANGE = 260
+TREE_MOB_SIZE = 420
 
+class TreeMob:
+    _shared_frames = None
+
+    def __init__(self, x, y, centered=False):
+        if TreeMob._shared_frames is None:
+            raw = pygame.image.load("assets/enemies/tree_mob.png").convert_alpha()
+            # Create two frames: base + slightly shifted for idle sway
+            base = pygame.transform.scale(raw, (TREE_MOB_SIZE, TREE_MOB_SIZE))
+            sway = pygame.transform.scale(raw, (TREE_MOB_SIZE - 8, TREE_MOB_SIZE + 8))
+            TreeMob._shared_frames = [base, sway]
+        self.walkFrames = TreeMob._shared_frames
+        self.frameIndex = 0.0
+        self.current_image = self.walkFrames[0]
+        if centered:
+            self.rect = self.current_image.get_rect(center=(x, y))
+        else:
+            self.rect = self.current_image.get_rect(topleft=(x, y))
+        self.max_hp = self.hp = 5
+        self.last_beam_damage_time = self.hitTime = -1000
+
+    def take_damage(self, dmg):
+        self.hp = max(0, self.hp - dmg)
+        self.hitTime = pygame.time.get_ticks()
+
+    def update(self, player):
+        if self.hp <= 0:
+            return
+        # Stationary ambush enemy: it roots on spawn, then only sways in place.
+        self.frameIndex = (self.frameIndex + 0.08) % len(self.walkFrames)
+        self.current_image = applyHitFlash(self.walkFrames[int(self.frameIndex)], self.hitTime)
+
+
+# ---------------------------------------------------------------------------
+# Necromancer boss
+# ---------------------------------------------------------------------------
 class Necromancer:
     def __init__(self, x, y):
         walkRaw = loadSheet("assets/enemies/necromancer_front.png", 4, 2, (1300, 1300))
@@ -137,98 +184,29 @@ class Necromancer:
         if not self.isCasting and now - self.lastCastEnd >= 5000:
             self.isCasting, self.castIndex, self.castStartTime = True, 0.0, now
             self.beamIndex = 0.0
-            import random
             for _ in range(4):
                 gx = self.rect.centerx + random.randint(-400, 400)
                 gy = self.rect.centery + random.randint(-400, 400)
                 spawned.append(Ghoul(gx, gy))
 
         if self.isCasting:
-
             frame = self.castFrames[int(self.castIndex)]
-
             self.castIndex = (self.castIndex + 0.2) if self.castIndex < 11 else 7.0
             self.beamIndex = (self.beamIndex + 0.15) % len(self.beamFrames)
-
             if now - self.castStartTime >= 4000:
                 self.isCasting, self.lastCastEnd = False, now
                 self.cast_just_ended = True
-
         else:
             self.walkIndex = (self.walkIndex + 0.2) % len(self.walkFrames)
             frame = self.walkFrames[int(self.walkIndex)]
 
         self.current_image = applyHitFlash(frame, self.hitTime)
-        
         return spawned
 
 
-def _make_crawler_frames():
-    frames = []
-    for phase in range(2):
-        s = pygame.Surface((180, 180), pygame.SRCALPHA)
-        body_color = (120, 80, 160)
-        bone_color = (200, 190, 170)
-        cy = 100 + (phase * 6 - 3)
-        for i in range(6):
-            bx = 30 + i * 22
-            by = cy + int(math.sin(i + phase * 1.5) * 8)
-            pygame.draw.ellipse(s, body_color, (bx, by, 24, 18))
-            pygame.draw.ellipse(s, bone_color, (bx + 4, by + 2, 16, 10))
-            pygame.draw.line(s, bone_color, (bx + 6, by + 16), (bx, by + 30), 2)
-            pygame.draw.line(s, bone_color, (bx + 18, by + 16), (bx + 24, by + 30), 2)
-        pygame.draw.circle(s, (180, 60, 60), (24, cy + 2), 14)
-        pygame.draw.circle(s, (255, 200, 50), (20, cy - 2), 4)
-        pygame.draw.circle(s, (255, 200, 50), (28, cy - 2), 4)
-        frames.append(s)
-    return frames
-
-
-class TombCrawler:
-    _shared_frames = None
-
-    def __init__(self, x, y):
-        if TombCrawler._shared_frames is None:
-            path = "assets/enemies/tomb_crawler.png"
-            if os.path.exists(path):
-                try:
-                    raw = pygame.image.load(path).convert_alpha()
-                    fw = raw.get_width() // 2
-                    fh = raw.get_height()
-                    f1 = pygame.transform.scale(raw.subsurface((0, 0, fw, fh)).copy(), (180, 180))
-                    f2 = pygame.transform.scale(raw.subsurface((fw, 0, fw, fh)).copy(), (180, 180))
-                    for f in (f1, f2):
-                        f.set_colorkey((255, 255, 255))
-                    TombCrawler._shared_frames = [f1, f2]
-                except Exception:
-                    TombCrawler._shared_frames = _make_crawler_frames()
-            else:
-                TombCrawler._shared_frames = _make_crawler_frames()
-
-        self.walkFrames = TombCrawler._shared_frames
-        self.frameIndex = 0.0
-        self.current_image = self.walkFrames[0]
-        self.rect = self.current_image.get_rect(topleft=(x, y))
-        self.max_hp = self.hp = 6
-        self.last_beam_damage_time = self.hitTime = -1000
-
-    def take_damage(self, dmg):
-        self.hp = max(0, self.hp - dmg)
-        self.hitTime = pygame.time.get_ticks()
-
-    def update(self, player):
-        if self.hp <= 0:
-            return
-        dx = player.rect.centerx - self.rect.centerx
-        dy = player.rect.centery - self.rect.centery
-        dist = math.hypot(dx, dy)
-        self.frameIndex = (self.frameIndex + 0.15) % len(self.walkFrames)
-        self.current_image = applyHitFlash(self.walkFrames[int(self.frameIndex)], self.hitTime)
-        if dist > 8:
-            self.rect.x += round(dx / dist * 10)
-            self.rect.y += round(dy / dist * 10)
-
-
+# ---------------------------------------------------------------------------
+# Necromancer projectile
+# ---------------------------------------------------------------------------
 NECRO_PROJ_SPEED = 230
 NECRO_PROJ_DAMAGE = 3
 NECRO_PROJ_HIT_RANGE = 140

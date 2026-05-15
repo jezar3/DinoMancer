@@ -117,14 +117,15 @@ class BeamAttack:
 
         self.healthBarFrames = loadFrames([f"assets/Specials/health bar/Sprite-000{i}.png" for i in range(3, 6)])
 
-        rawHp = loadFrames([f"assets/Necromancer/HP/HP{i}.png" for i in range(1, 6)])
-        self.bossHpFrames = []
-        for img in rawHp:
-            bbox = img.get_bounding_rect()
+        # Only HP5.png exists in assets
+        try:
+            hp_img = pygame.image.load("assets/Necromancer/HP/HP5.png").convert_alpha()
+            bbox = hp_img.get_bounding_rect()
             if bbox.width > 0 and bbox.height > 0:
-                self.bossHpFrames.append(img.subsurface(bbox).copy())
-            else:
-                self.bossHpFrames.append(img)
+                hp_img = hp_img.subsurface(bbox).copy()
+            self.bossHpFrames = [hp_img]
+        except Exception:
+            self.bossHpFrames = []
 
     
         self.bulletImage = pygame.image.load("assets/attacks/level 3 beam/LaserShot2.png").convert_alpha()
@@ -160,6 +161,11 @@ class BeamAttack:
             if b.alive:
                 b.check_hit(enemies, kills, camera, renderer)
         self.bullets = [b for b in self.bullets if b.alive]
+
+        # Block attacks while debuffed
+        if hasattr(player, 'debuff_active') and player.debuff_active:
+            self.reset()
+            return kills
 
         if self.weaponMode == "bullet":
             self._updateBullet(player, enemies, camera, renderer, kills, ammo_sys)
@@ -202,7 +208,7 @@ class BeamAttack:
         self.lastBulletTime = now
         if ammo_sys:
             ammo_sys.consume()
-        dmg = BULLET_DAMAGE_PER_LEVEL.get(player.level, 0.5)
+        dmg = BULLET_DAMAGE_PER_LEVEL.get(min(player.level, 5), 10.0)
         self.bullets.append(Bullet(start_x, start_y, dir_x, dir_y,
                                    self.bulletImage, angle, dmg, target_dist))
         if self.bullet_sound:
@@ -353,7 +359,7 @@ class BeamAttack:
 
 
     def drawXpBar(self, window, player):
-        from main_actor import XP_THRESHOLDS
+        from main_actor import XP_THRESHOLDS, _xp_threshold
         sw, sh = window.get_size()
 
         bar_w = max(160, sw // 4)
@@ -361,16 +367,17 @@ class BeamAttack:
         x = 20
         y = sh - bar_h - 50
 
-        
-        if player.level >= 5:
-            fill_ratio = 1.0
-            xp_label = "MAX"
-        else:
-            prev = XP_THRESHOLDS.get(player.level - 1, 0) if player.level > 1 else 0
-            needed = XP_THRESHOLDS[player.level] - prev
-            current = player.xp - prev
-            fill_ratio = min(1.0, max(0.0, current / needed))
-            xp_label = f"{current}/{needed}"
+        # Endless leveling: always show a progress bar
+        prev = XP_THRESHOLDS.get(player.level - 1, 0) if player.level > 1 else 0
+        if player.level - 1 not in XP_THRESHOLDS and player.level > 1:
+            prev = _xp_threshold(player.level - 1)
+        threshold = XP_THRESHOLDS.get(player.level)
+        if threshold is None:
+            threshold = _xp_threshold(player.level)
+        needed = max(1, threshold - prev)
+        current = player.xp - prev
+        fill_ratio = min(1.0, max(0.0, current / needed))
+        xp_label = f"{current}/{needed}"
 
         if not hasattr(self, '_xp_bar_cache') or self._xp_bar_cache is None or self._xp_bar_w != bar_w:
             self._xp_bar_w = bar_w
@@ -413,7 +420,9 @@ class BeamAttack:
         sw, sh = window.get_size()
         pip_w, pip_h = 16, 18
         gap = 3
-        total_w = player.max_hp * (pip_w + gap)
+        # Cap display at 20 pips, show number for higher
+        display_max = min(player.max_hp, 20)
+        total_w = display_max * (pip_w + gap)
         x = sw - total_w - 20
         y = sh - pip_h - 20
 
@@ -421,7 +430,7 @@ class BeamAttack:
         pygame.draw.rect(bg, (0, 0, 0, 140), (0, 0, total_w + 8, pip_h + 8), border_radius=4)
         window.blit(bg, (x - 4, y - 4))
 
-        for i in range(player.max_hp):
+        for i in range(display_max):
             px = x + i * (pip_w + gap)
             if i < player.hp:
                 pygame.draw.rect(window, (220, 40, 40), (px, y, pip_w, pip_h), border_radius=3)

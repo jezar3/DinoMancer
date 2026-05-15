@@ -1,12 +1,12 @@
 import math
 import pygame
 
-DASH_SPEED      = 250      
-DASH_DURATION   = 6      
-DASH_COOLDOWN   = 500    
-IFRAMES         = 4       
-GHOST_LIFETIME  = 18        
-GHOST_TINT      = (100, 60, 200)  
+DASH_SPEED      = 220       # slightly reduced for balance
+DASH_DURATION   = 6
+DASH_COOLDOWN   = 650       # slightly longer cooldown
+IFRAMES         = 4
+GHOST_LIFETIME  = 18
+GHOST_TINT      = (100, 60, 200)
 
 
 def _make_ghost(image, alpha):
@@ -32,11 +32,11 @@ class Dash:
 
     def __init__(self):
         self._active     = False
-        self._frame       = 0          
-        self._dir_x       = 0.0        
-        self._dir_y       = 0.0        
-        self._last_dash   = -99999    
-        self._ghosts      = []         
+        self._frame       = 0
+        self._dir_x       = 0.0
+        self._dir_y       = 0.0
+        self._last_dash   = -99999
+        self._ghosts      = []
 
 
     @property
@@ -52,6 +52,10 @@ class Dash:
         if self._active or now - self._last_dash < DASH_COOLDOWN:
             return
 
+        # Block dash while debuffed
+        if hasattr(player, 'debuff_active') and player.debuff_active:
+            return
+
         keys = pygame.key.get_pressed()
         fwd, strafe = 0.0, 0.0
         if keys[pygame.K_w]: fwd += 1
@@ -59,7 +63,7 @@ class Dash:
         if keys[pygame.K_d]: strafe += 1
         if keys[pygame.K_a]: strafe -= 1
         if fwd == 0 and strafe == 0:
-            fwd = 1  
+            fwd = 1
 
         length = math.hypot(fwd, strafe)
         fwd /= length
@@ -82,6 +86,10 @@ class Dash:
         for g in self._ghosts:
             g.life -= 1
         self._ghosts = [g for g in self._ghosts if g.life > 0]
+
+        if hasattr(player, 'debuff_active') and player.debuff_active:
+            self._active = False
+            return
 
         if not self._active:
             return

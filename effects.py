@@ -3,8 +3,8 @@ import random
 import pygame
 
 
-SHAKE_INTENSITY = 10       
-SHAKE_DURATION  = 300     
+SHAKE_INTENSITY = 10
+SHAKE_DURATION  = 300
 
 
 class ScreenShake:
@@ -178,6 +178,12 @@ class WorldVFX:
                 gravity=0.0,
             ))
 
+    def tree_mob_debuff(self, x, y):
+        """Burst of sickly green/brown particles when TreeMob hits player."""
+        self.burst(x, y, (80, 160, 50), count=22, speed_min=6, speed_max=22,
+                   z_min=30, z_max=160, radius=5, life_min=24, life_max=42)
+        self.ring(x, y, (120, 180, 60), count=16, speed=16, radius=4, life=30)
+
     def update(self):
         alive = []
         for p in self._particles:
@@ -228,8 +234,8 @@ class WorldVFX:
                 _draw_alpha_circle(window, sx, sy, radius, p.color, alpha)
 
 
-FLASH_TOTAL_MS   = 1600   
-FLASH_FADE_IN_MS = 200    
+FLASH_TOTAL_MS   = 1600
+FLASH_FADE_IN_MS = 200
 
 
 class LevelUpFlash:
@@ -237,7 +243,7 @@ class LevelUpFlash:
     def __init__(self):
         self._start_time = -99999
         self._active = False
-        self._font = None         
+        self._font = None
 
     def trigger(self):
         self._start_time = pygame.time.get_ticks()
@@ -297,3 +303,46 @@ class LevelUpFlash:
 
         rect = txt.get_rect(center=(cx, cy))
         window.blit(txt, rect)
+
+
+# ---------------------------------------------------------------------------
+# Debuff overlay  –  screen tint + icon when player is debuffed by TreeMob
+# ---------------------------------------------------------------------------
+class DebuffOverlay:
+    """Draws a sickly green screen tint and a status icon while debuff is active."""
+
+    def __init__(self):
+        self._icon_font = None
+        self._tint = None
+
+    def draw(self, window, player):
+        if not player.debuff_active:
+            return
+
+        sw, sh = window.get_size()
+
+        # Screen tint — semi-transparent green/brown
+        if self._tint is None or self._tint.get_size() != (sw, sh):
+            self._tint = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        self._tint.fill((0, 0, 0, 0))
+        t = pygame.time.get_ticks()
+        pulse = 0.5 + 0.5 * math.sin(t * 0.008)
+        tint_alpha = int(25 + 20 * pulse)
+        self._tint.fill((40, 80, 20, tint_alpha))
+        window.blit(self._tint, (0, 0))
+
+        # Vignette-like border flash
+        border_a = int(60 + 40 * pulse)
+        border_s = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        thickness = max(6, min(sw, sh) // 20)
+        pygame.draw.rect(border_s, (60, 120, 30, border_a), (0, 0, sw, sh), thickness)
+        window.blit(border_s, (0, 0))
+
+        # Status icon
+        if self._icon_font is None:
+            self._icon_font = pygame.font.SysFont("Monocraft", max(14, sw // 40))
+
+        remaining = player.debuff_time_remaining
+        txt = self._icon_font.render(f"ROOTED {remaining:.1f}s", True, (140, 220, 80))
+        txt.set_alpha(int(180 + 75 * pulse))
+        window.blit(txt, (sw // 2 - txt.get_width() // 2, sh // 6))

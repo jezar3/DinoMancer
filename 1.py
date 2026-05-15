@@ -4,12 +4,12 @@ import random
 import sys
 import pygame
 from attacks import BeamAttack, getScreenPos
-from enemies import Ghoul, Necromancer, Slime, NecromancerProjectile, NECRO_PROJ_DAMAGE
+from enemies import Ghoul, Necromancer, Slime, TreeMob, NecromancerProjectile, NECRO_PROJ_DAMAGE, TREE_MOB_DEBUFF_DURATION_MS, TREE_MOB_HIT_RANGE
 from main_actor import Player
 from renderer import PerspectiveRenderer
 from skills import Dash
 from tilemap import TileMap
-from effects import ScreenShake, LevelUpFlash, WorldVFX
+from effects import ScreenShake, LevelUpFlash, WorldVFX, DebuffOverlay
 from game_systems import (
     XPOrb, LargeXPOrb, HealthPickup, WaveAnnouncer, KillStreak,
     AmmoSystem, RunTimer, DynamicLighting,
@@ -29,26 +29,32 @@ _set_resource_cwd()
 TREE_VIEW_DISTANCE = 8000
 SLIME_HIT_RANGE = 200
 SLIME_HIT_COOLDOWN = 500
-HEALTH_DROP_CHANCE = 0.08
+HEALTH_DROP_CHANCE = 0.05
 
 WAVE_INTERVAL = 1800
-TOTAL_WAVES = 25
-GHOUL_START_WAVE = 5
+GHOUL_START_WAVE = 3
 BOSS_SPAWN_WAVE = 12
+TREE_MOB_START_WAVE = 6
 
 NECRO_FIRE_INTERVAL = 150
 
 MAX_SLIMES = 100
 MAX_GHOULS = 50
+MAX_TREE_MOBS = 6
+TREE_MOB_BASE_INTERVAL = 900
+TREE_MOB_MIN_INTERVAL = 420
+TREE_MOB_FRONT_MIN_DIST = 260
+TREE_MOB_FRONT_MAX_DIST = 430
+TREE_MOB_FRONT_SIDE_JITTER = 180
 ENEMY_CULL_DIST = 6000
 
 os.environ["SLD_AUDIODRIVER"] = "dummy"
 
 
-def createFullscreenWindow(resolution_scale=2):
+def createFullscreenWindow():
     info = pygame.display.Info()
-    width = max(640, info.current_w // resolution_scale)
-    height = max(360, info.current_h // resolution_scale)
+    width = max(640, info.current_w // 2)
+    height = max(360, info.current_h // 2)
     return pygame.display.set_mode((width, height), pygame.FULLSCREEN | pygame.SCALED)
 
 
@@ -175,38 +181,29 @@ def pauseMenu(window, clock):
 def startMenu(window, clock):
     sw, sh = window.get_size()
     bg = pygame.transform.scale(pygame.image.load("assets/start_menu/start_backround.png").convert(), (sw, sh))
-    font = pygame.font.SysFont("Monocraft", sw // 30)
-    chk_font = pygame.font.SysFont("Monocraft", max(10, sw // 45))
+    font = pygame.font.SysFont("Monocraft", max(18, sw // 30))
     ctrl_title_font = pygame.font.SysFont("Monocraft", max(12, sw // 38))
     ctrl_font = pygame.font.SysFont("Monocraft", max(9, sw // 55))
+    title_font = pygame.font.SysFont("Monocraft", max(32, sw // 14))
+    sub_font = pygame.font.SysFont("Monocraft", max(10, sw // 50))
+    card_font = pygame.font.SysFont("Monocraft", max(14, sw // 38))
 
     controls = [
-        ("WASD", "Move"),
-        ("Mouse", "Rotate Camera"),
-        ("Left Click", "Attack"),
-        ("Q", "Dash"),
-        ("E", "Switch Weapon"),
-        ("R", "Reload"),
-        ("T", "Unlock / Lock Mouse"),
-        ("ESC", "Pause"),
+        ("WASD", "Move"), ("Mouse", "Rotate Camera"), ("Left Click", "Attack"),
+        ("Q", "Dash"), ("E", "Switch Weapon"), ("R", "Reload"),
+        ("T", "Unlock / Lock Mouse"), ("ESC", "Pause"),
     ]
-
     ctrl_pad = 14
     ctrl_line_h = max(16, sh // 22)
     ctrl_w = max(260, sw // 3)
     ctrl_h = ctrl_line_h * (len(controls) + 1) + ctrl_pad * 2
     ctrl_x = 16
     ctrl_y = sh // 2 - ctrl_h // 2
-
     ctrl_bg = pygame.Surface((ctrl_w, ctrl_h), pygame.SRCALPHA)
     pygame.draw.rect(ctrl_bg, (0, 0, 0, 160), (0, 0, ctrl_w, ctrl_h), border_radius=8)
     pygame.draw.rect(ctrl_bg, (140, 120, 180, 100), (0, 0, ctrl_w, ctrl_h), 1, border_radius=8)
 
-    selected_mode = None  
-    card_font = pygame.font.SysFont("Monocraft", max(14, sw // 38))
-    sub_font = pygame.font.SysFont("Monocraft", max(9, sw // 60))
-    
-    
+    selected_mode = None
     card_w = max(200, sw // 4)
     card_h = max(56, sh // 8)
     panel_pad = 16
@@ -214,20 +211,46 @@ def startMenu(window, clock):
     panel_h = card_h + panel_pad * 2 + max(16, sh // 24)
     panel_x = sw - panel_w - 16
     panel_y = sh // 2 - panel_h // 2
-
-    card_x = panel_x + panel_pad
-    god_card_y = panel_y + panel_pad + max(16, sh // 24)
-    chk_rect_god = pygame.Rect(card_x, god_card_y, card_w, card_h)
+    chk_rect_god = pygame.Rect(panel_x + panel_pad, panel_y + panel_pad + max(16, sh // 24), card_w, card_h)
 
     particles = []
-    for _ in range(25):
+    for _ in range(60):
         particles.append([random.randint(0, sw), random.randint(0, sh),
-                          random.uniform(0.3, 1.0), random.randint(1, 3)])
+                          random.uniform(0.2, 1.2), random.randint(1, 3),
+                          random.uniform(0, math.tau)])
 
     vig = pygame.Surface((sw, sh), pygame.SRCALPHA)
-    for border in range(min(sw, sh) // 4):
-        a = max(0, int(80 * (1 - border / (min(sw, sh) / 4))))
+    for border in range(min(sw, sh) // 3):
+        a = max(0, int(120 * (1 - border / (min(sw, sh) / 3))))
         pygame.draw.rect(vig, (0, 0, 0, a), (border, border, sw - border * 2, sh - border * 2), 1)
+
+    # Gameplay flash system
+    FLASH_INTERVAL_MS = 3500
+    FLASH_DUR_MS = 800
+    FLASH_FADE_MS = 300
+    flash_surf = pygame.Surface((sw, sh))
+
+    def _gen_flash():
+        flash_surf.fill((8, 6, 16))
+        horizon = int(sh * 0.35)
+        pygame.draw.rect(flash_surf, (15, 25, 10), (0, horizon, sw, sh - horizon))
+        cx, cy = sw // 2 + random.randint(-100, 100), sh // 2 + random.randint(-40, 40)
+        pts = []
+        for _ in range(30):
+            px = cx + random.randint(-200, 200)
+            py = cy + random.randint(-120, 120)
+            color = random.choice([(255, 95, 70), (255, 220, 80), (120, 210, 255), (190, 80, 255)])
+            pygame.draw.circle(flash_surf, color, (px, py), random.randint(2, 8))
+            pts.append((px, py, color, random.uniform(1, 4), random.uniform(0, math.tau)))
+        for _ in range(random.randint(3, 6)):
+            ex = random.randint(int(sw * 0.2), int(sw * 0.8))
+            ey = random.randint(int(sh * 0.3), int(sh * 0.7))
+            pygame.draw.circle(flash_surf, (60, 180, 60), (ex, ey), random.randint(15, 35))
+        return pts
+
+    last_flash = pygame.time.get_ticks() - FLASH_INTERVAL_MS + 1000
+    flash_on = False
+    flash_pts = []
 
     while True:
         mx, my = pygame.mouse.get_pos()
@@ -241,17 +264,51 @@ def startMenu(window, clock):
                     selected_mode = None if selected_mode == "god" else "god"
 
         t = pygame.time.get_ticks()
-        window.blit(bg, (0, 0))
+        dt_flash = t - last_flash
+        if not flash_on and dt_flash >= FLASH_INTERVAL_MS:
+            flash_on = True
+            last_flash = t
+            flash_pts = _gen_flash()
+        if flash_on and t - last_flash >= FLASH_DUR_MS:
+            flash_on = False
+
+        px_off = int(math.sin(t * 0.0003) * 20)
+        window.blit(bg, (px_off - 20, 0))
+
+        if flash_on:
+            el = t - last_flash
+            if el < FLASH_FADE_MS:
+                fa = int(255 * el / FLASH_FADE_MS)
+            elif el > FLASH_DUR_MS - FLASH_FADE_MS:
+                fa = int(255 * (FLASH_DUR_MS - el) / FLASH_FADE_MS)
+            else:
+                fa = 255
+            flash_surf.set_alpha(min(255, max(0, fa)))
+            window.blit(flash_surf, (0, 0))
 
         for p in particles:
             p[1] -= p[2]
+            p[0] += math.sin(t * 0.001 + p[4]) * 0.3
             if p[1] < -5:
                 p[1] = sh + 5
                 p[0] = random.randint(0, sw)
-            pa = int(60 + 40 * math.sin(t * 0.003 + p[0]))
-            pygame.draw.circle(window, (200, 180, 255, pa), (int(p[0]), int(p[1])), p[3])
+            pa = max(0, int(50 + 50 * math.sin(t * 0.003 + p[0] * 0.01 + p[4])))
+            s = pygame.Surface((p[3] * 2 + 2, p[3] * 2 + 2), pygame.SRCALPHA)
+            pygame.draw.circle(s, (200, 180, 255, pa), (p[3] + 1, p[3] + 1), p[3])
+            window.blit(s, (int(p[0]) - p[3] - 1, int(p[1]) - p[3] - 1))
 
         window.blit(vig, (0, 0))
+
+        pulse = 0.5 + 0.5 * math.sin(t * 0.003)
+        title_text = title_font.render("DINOMANCER", True, (255, 240, 200))
+        title_glow = title_font.render("DINOMANCER", True, (180, 120, 255))
+        title_glow.set_alpha(int(60 + 40 * pulse))
+        ty = sh // 5 + int(math.sin(t * 0.002) * 4)
+        window.blit(title_glow, title_glow.get_rect(center=(sw // 2 + 2, ty + 2)))
+        window.blit(title_text, title_text.get_rect(center=(sw // 2, ty)))
+        tagline = sub_font.render("Endless Survival Roguelike", True, (180, 170, 200))
+        tagline.set_alpha(int(140 + 80 * pulse))
+        window.blit(tagline, tagline.get_rect(center=(sw // 2, ty + title_text.get_height() // 2 + 16)))
 
         window.blit(ctrl_bg, (ctrl_x, ctrl_y))
         title_surf = ctrl_title_font.render("How To Play", True, (255, 220, 80))
@@ -266,67 +323,30 @@ def startMenu(window, clock):
         alpha = int(130 + 125 * math.sin(t * 0.004))
         txt = font.render("Press ENTER to Play", True, (255, 255, 255))
         txt.set_alpha(alpha)
-        window.blit(txt, txt.get_rect(center=(sw // 2, sh - sh // 6)))
+        window.blit(txt, txt.get_rect(center=(sw // 2, sh - sh // 7)))
 
         panel_bg = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
         pygame.draw.rect(panel_bg, (0, 0, 0, 170), (0, 0, panel_w, panel_h), border_radius=10)
         pygame.draw.rect(panel_bg, (180, 140, 255, 90), (0, 0, panel_w, panel_h), 1, border_radius=10)
         window.blit(panel_bg, (panel_x, panel_y))
         panel_title = ctrl_title_font.render("Pick Game add-ons", True, (255, 220, 80))
-        window.blit(panel_title, (panel_x + panel_w // 2 - panel_title.get_width() // 2,
-                                  panel_y + panel_pad - 2))
+        window.blit(panel_title, (panel_x + panel_w // 2 - panel_title.get_width() // 2, panel_y + panel_pad - 2))
 
-        def _draw_card(rect, active, hovered, color_on, title_text, desc_text):
-            pulse = 0.5 + 0.5 * math.sin(t * 0.005)
-            card_surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-            if active:
-                bg_a = int(70 + 30 * pulse)
-                card_surf.fill((*color_on, bg_a))
-            elif hovered:
-                card_surf.fill((255, 255, 255, 18))
-            else:
-                card_surf.fill((255, 255, 255, 8))
-            window.blit(card_surf, rect.topleft)
-            if active:
-                glow_a = int(180 + 75 * pulse)
-                border_col = (*color_on[:3], min(255, glow_a))
-                pygame.draw.rect(window, border_col, rect, 3, border_radius=8)
-                glow_rect = rect.inflate(6, 6)
-                glow_s = pygame.Surface((glow_rect.w, glow_rect.h), pygame.SRCALPHA)
-                pygame.draw.rect(glow_s, (*color_on[:3], int(40 * pulse)), (0, 0, glow_rect.w, glow_rect.h), 3, border_radius=10)
-                window.blit(glow_s, glow_rect.topleft)
-            elif hovered:
-                pygame.draw.rect(window, (220, 220, 240, 120), rect, 2, border_radius=8)
-            else:
-                pygame.draw.rect(window, (100, 100, 120, 100), rect, 1, border_radius=8)
-            chk_sz = min(22, rect.h - 16)
-            chk_bx = rect.x + 10
-            chk_by = rect.centery - chk_sz // 2
-            chk_r = pygame.Rect(chk_bx, chk_by, chk_sz, chk_sz)
-            if active:
-                pygame.draw.rect(window, color_on, chk_r, border_radius=4)
-                pygame.draw.line(window, (0, 0, 0),
-                                 (chk_r.x + 4, chk_r.centery),
-                                 (chk_r.centerx - 1, chk_r.bottom - 4), 3)
-                pygame.draw.line(window, (0, 0, 0),
-                                 (chk_r.centerx - 1, chk_r.bottom - 4),
-                                 (chk_r.right - 4, chk_r.y + 4), 3)
-            else:
-                pygame.draw.rect(window, (160, 160, 180) if hovered else (100, 100, 120), chk_r, 2, border_radius=4)
-            txt_x = chk_bx + chk_sz + 10
-            t_col = color_on if active else ((240, 240, 250) if hovered else (190, 190, 200))
-            title_s = card_font.render(title_text, True, t_col)
-            window.blit(title_s, (txt_x, rect.y + 6))
-            d_col = (*color_on[:3], 200) if active else (150, 150, 165)
-            desc_s = sub_font.render(desc_text, True, d_col)
-            window.blit(desc_s, (txt_x, rect.y + 6 + title_s.get_height() + 2))
-
+        god_active = selected_mode == "god"
         god_hovered = chk_rect_god.collidepoint(mx, my)
-
-        _draw_card(chk_rect_god,
-                   selected_mode == "god", god_hovered,
-                   (255, 220, 60),
-                   "God Mode", "")
+        cs = pygame.Surface((chk_rect_god.w, chk_rect_god.h), pygame.SRCALPHA)
+        if god_active:
+            cs.fill((255, 220, 60, int(50 + 30 * pulse)))
+        elif god_hovered:
+            cs.fill((255, 255, 255, 18))
+        else:
+            cs.fill((255, 255, 255, 8))
+        window.blit(cs, chk_rect_god.topleft)
+        bdr = (255, 220, 60, 200) if god_active else ((220, 220, 240, 120) if god_hovered else (100, 100, 120, 100))
+        pygame.draw.rect(window, bdr, chk_rect_god, 2, border_radius=8)
+        tc = (255, 220, 60) if god_active else ((240, 240, 250) if god_hovered else (190, 190, 200))
+        lbl = card_font.render("God Mode", True, tc)
+        window.blit(lbl, (chk_rect_god.x + 40, chk_rect_god.centery - lbl.get_height() // 2))
 
         pygame.display.flip()
         clock.tick(60)
@@ -343,6 +363,27 @@ def spawnPos(player):
         player.rect.centerx + random.choice([-1, 1]) * random.randint(800, 1500),
         player.rect.centery + random.choice([-1, 1]) * random.randint(800, 1500),
     )
+
+
+def spawnTreeMobAmbushPos(player, camera):
+    forward_x = math.sin(camera.camYAW)
+    forward_y = -math.cos(camera.camYAW)
+    side_x = math.cos(camera.camYAW)
+    side_y = math.sin(camera.camYAW)
+    dist = random.randint(TREE_MOB_FRONT_MIN_DIST, TREE_MOB_FRONT_MAX_DIST)
+    side = random.randint(-TREE_MOB_FRONT_SIDE_JITTER, TREE_MOB_FRONT_SIDE_JITTER)
+    return (
+        player.rect.centerx + int(forward_x * dist + side_x * side),
+        player.rect.centery + int(forward_y * dist + side_y * side),
+    )
+
+
+def applyTreeMobRoot(player, vfx, screenShake):
+    if player.apply_debuff(TREE_MOB_DEBUFF_DURATION_MS):
+        vfx.tree_mob_debuff(player.rect.centerx, player.rect.centery)
+        screenShake.trigger()
+        return True
+    return False
 
 
 pygame.init()
@@ -403,11 +444,13 @@ while True:
     player = Player(700, 700, 12)
     slimes = []
     ghouls = []
+    tree_mobs = []
 
     xp_orbs = []
     health_pickups = []
     necro_projectiles = []
     slimeTimer = 0
+    treeMobTimer = 0
     necromancer = None
     frameCount = 0
     bossWarned = False
@@ -420,6 +463,7 @@ while True:
     dash_unlocked = False
     screenShake = ScreenShake()
     levelUpFlash = LevelUpFlash()
+    debuffOverlay = DebuffOverlay()
     vfx = WorldVFX()
     necroFireTimer = 0
 
@@ -495,7 +539,7 @@ while True:
 
         frameCount += 1
 
-        newWave = min(TOTAL_WAVES, frameCount // WAVE_INTERVAL + 1)
+        newWave = frameCount // WAVE_INTERVAL + 1
         if newWave > currentWave:
             currentWave = newWave
             waveAnnouncer.announce(currentWave)
@@ -549,6 +593,7 @@ while True:
                 camera.camYAW += mdx * 0.002
                 camera.camPITCH = max(-250, min(250, camera.camPITCH - mdy * 0.3))
 
+        player.update_debuff()
         if necromancer and necromancer.isCasting:
             saved_speed = player.speed
             player.speed = max(2, player.speed // 2)
@@ -562,10 +607,11 @@ while True:
         ammoSys.update()
         vfx.update()
 
-        prevCount = len(slimes) + len(ghouls)
+        prevCount = len(slimes) + len(ghouls) + len(tree_mobs)
         slimes = [s for s in slimes if s.hp > 0]
         ghouls = [g for g in ghouls if g.hp > 0]
-        if len(slimes) + len(ghouls) < prevCount:
+        tree_mobs = [t for t in tree_mobs if t.hp > 0]
+        if len(slimes) + len(ghouls) + len(tree_mobs) < prevCount:
             sfx_death.play()
 
         is_inv = dash_unlocked and dash.is_invincible
@@ -583,6 +629,16 @@ while True:
             if len(ghouls) < MAX_GHOULS:
                 ghouls.append(Ghoul(*spawnPos(player)))
 
+        # TreeMob spawning (wave 6+)
+        if currentWave >= TREE_MOB_START_WAVE:
+            treeMobTimer += 1
+            tree_interval = max(TREE_MOB_MIN_INTERVAL, int(TREE_MOB_BASE_INTERVAL / diff_mult))
+            if treeMobTimer >= tree_interval and len(tree_mobs) < MAX_TREE_MOBS:
+                treeMobTimer = 0
+                tx, ty = spawnTreeMobAmbushPos(player, camera)
+                tree_mobs.append(TreeMob(tx, ty, centered=True))
+                applyTreeMobRoot(player, vfx, screenShake)
+
         px, py = player.rect.centerx, player.rect.centery
         for s in slimes:
             if abs(s.rect.centerx - px) + abs(s.rect.centery - py) < ENEMY_CULL_DIST:
@@ -590,6 +646,9 @@ while True:
         for g in ghouls:
             if abs(g.rect.centerx - px) + abs(g.rect.centery - py) < ENEMY_CULL_DIST:
                 g.update(player)
+        for tm in tree_mobs:
+            if abs(tm.rect.centerx - px) + abs(tm.rect.centery - py) < ENEMY_CULL_DIST:
+                tm.update(player)
 
         if necromancer:
             newGhouls = necromancer.update(player)
@@ -624,7 +683,7 @@ while True:
                         screenShake.trigger()
         necro_projectiles = [p for p in necro_projectiles if p.alive]
 
-        all_enemies = slimes + ghouls
+        all_enemies = slimes + ghouls + tree_mobs
         allEnemies = all_enemies + ([necromancer] if necromancer else [])
         kills = beam.update(player, allEnemies, camera, renderer, ammoSys)
 
@@ -673,6 +732,15 @@ while True:
             for enemy in all_enemies:
                 if enemy.hp <= 0:
                     continue
+                # TreeMob: debuff instead of damage
+                if isinstance(enemy, TreeMob):
+                    dx = enemy.rect.centerx - player.rect.centerx
+                    dy = enemy.rect.centery - player.rect.centery
+                    if abs(dx) + abs(dy) > TREE_MOB_HIT_RANGE * 2:
+                        continue
+                    if dx * dx + dy * dy <= TREE_MOB_HIT_RANGE * TREE_MOB_HIT_RANGE:
+                        applyTreeMobRoot(player, vfx, screenShake)
+                    continue
                 dx = enemy.rect.centerx - player.rect.centerx
                 dy = enemy.rect.centery - player.rect.centery
                 if abs(dx) + abs(dy) > hit_range_2:
@@ -690,6 +758,7 @@ while True:
         renderList = trees + decos + [toRenderObj(player)]
         renderList.extend(toRenderObj(s) for s in slimes)
         renderList.extend(toRenderObj(g) for g in ghouls)
+        renderList.extend(toRenderObj(tm) for tm in tree_mobs)
         if dash_unlocked:
             renderList.extend(dash.get_ghost_render_objs())
 
@@ -739,6 +808,7 @@ while True:
         beam.drawXpBar(window, player)
         beam.drawPlayerHp(window, player)
         levelUpFlash.draw(window)
+        debuffOverlay.draw(window, player)
 
         waveAnnouncer.draw(window)
         killStreak.draw(window)
@@ -758,10 +828,14 @@ while True:
             running = False
 
         if necromancer and necromancer.hp <= 0:
-            pygame.mixer.music.stop()
-            pygame.mixer.stop()
-            showText(window, clock, "You win, YOU DEFIED AGAINST THE ODDS", sw // 40, 5000)
-            running = False
+            necromancer = None
+            bossWarned = False
+            vfx.boss_spawn(player.rect.centerx, player.rect.centery)
+            pygame.mixer.music.load("assets/Necromancer/SFX/before_boss_themesong.mp3")
+            pygame.mixer.music.set_volume(0.67)
+            pygame.mixer.music.play(-1)
+            renderer.setGround("assets/ground.png")
+            tileMap.setTreeImage("assets/world assets/tree_classic.png")
 
         clock.tick(60)
         pygame.display.flip()
