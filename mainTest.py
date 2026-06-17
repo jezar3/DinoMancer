@@ -1,8 +1,8 @@
-from add import Add 
-
-
-
-
-add = Add(1, 2)
-
+from add import Add 
+
+
+
+
+add = Add(1, 2)
+
 print(add.result())

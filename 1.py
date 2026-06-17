@@ -1,843 +1,843 @@
-import math
-import os
-import random
-import sys
-import pygame
-from attacks import BeamAttack, getScreenPos
-from enemies import Ghoul, Necromancer, Slime, TreeMob, NecromancerProjectile, NECRO_PROJ_DAMAGE, TREE_MOB_DEBUFF_DURATION_MS, TREE_MOB_HIT_RANGE
-from main_actor import Player
-from renderer import PerspectiveRenderer
-from skills import Dash
-from tilemap import TileMap
-from effects import ScreenShake, LevelUpFlash, WorldVFX, DebuffOverlay
-from game_systems import (
-    XPOrb, LargeXPOrb, HealthPickup, WaveAnnouncer, KillStreak,
-    AmmoSystem, RunTimer, DynamicLighting,
-    SkillPicker, MapDecorations,
-)
-
-
-def _set_resource_cwd():
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        os.chdir(sys._MEIPASS)
-    else:
-        os.chdir(os.path.dirname(os.path.abspath(__file__)))
-
-
-_set_resource_cwd()
-
-TREE_VIEW_DISTANCE = 8000
-SLIME_HIT_RANGE = 200
-SLIME_HIT_COOLDOWN = 500
-HEALTH_DROP_CHANCE = 0.05
-
-WAVE_INTERVAL = 1800
-GHOUL_START_WAVE = 3
-BOSS_SPAWN_WAVE = 12
-TREE_MOB_START_WAVE = 6
-
-NECRO_FIRE_INTERVAL = 150
-
-MAX_SLIMES = 100
-MAX_GHOULS = 50
-MAX_TREE_MOBS = 6
-TREE_MOB_BASE_INTERVAL = 900
-TREE_MOB_MIN_INTERVAL = 420
-TREE_MOB_FRONT_MIN_DIST = 260
-TREE_MOB_FRONT_MAX_DIST = 430
-TREE_MOB_FRONT_SIDE_JITTER = 180
-ENEMY_CULL_DIST = 6000
-
-os.environ["SLD_AUDIODRIVER"] = "dummy"
-
-
-def createFullscreenWindow():
-    info = pygame.display.Info()
-    width = max(640, info.current_w // 2)
-    height = max(360, info.current_h // 2)
-    return pygame.display.set_mode((width, height), pygame.FULLSCREEN | pygame.SCALED)
-
-
-class Camera:
-    def __init__(self, w, h):
-        self.width, self.height = w, h
-        self.world_x, self.world_y = 0, 0
-        self.camDistance = 500
-        self.camPITCH, self.camYAW = 0, 0
-
-    def update(self, player):
-        self.world_x = player.rect.centerx - math.sin(self.camYAW) * self.camDistance
-        self.world_y = player.rect.centery + math.cos(self.camYAW) * self.camDistance
-
-
-def showText(window, clock, text, size, ms=2000, waitKey=False):
-    sw, sh = window.get_size()
-    rendered = pygame.font.SysFont("Monocraft", size).render(text, True, (255, 255, 255))
-    rect = rendered.get_rect(center=(sw // 2, sh // 2))
-    start = pygame.time.get_ticks()
-    while True:
-        for e in pygame.event.get():
-            if e.type == pygame.QUIT:
-                pygame.quit(); raise SystemExit
-            if e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE:
-                if waitKey: return
-        if not waitKey and pygame.time.get_ticks() - start >= ms:
-            break
-        window.fill((0, 0, 0))
-        window.blit(rendered, rect)
-        pygame.display.flip()
-        clock.tick(60)
-
-
-def pauseMenu(window, clock):
-    """Returns 'resume', 'retry', or 'menu'."""
-    sw, sh = window.get_size()
-    background = window.copy()
-    overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
-    overlay.fill((0, 0, 0, 160))
-
-    title_font = pygame.font.SysFont("Monocraft", max(20, sw // 18))
-    btn_font = pygame.font.SysFont("Monocraft", max(14, sw // 32))
-    hint_font = pygame.font.SysFont("Monocraft", max(9, sw // 55))
-
-    buttons = [
-        ("Resume", "resume"),
-        ("Retry", "retry"),
-        ("Main Menu", "menu"),
-    ]
-    btn_w = max(200, sw // 3)
-    btn_h = max(44, sh // 10)
-    btn_gap = max(12, sh // 30)
-    total_h = len(buttons) * btn_h + (len(buttons) - 1) * btn_gap
-    start_y = sh // 2 - total_h // 2 + max(30, sh // 8)
-
-    btn_rects = []
-    for i in range(len(buttons)):
-        r = pygame.Rect(sw // 2 - btn_w // 2, start_y + i * (btn_h + btn_gap), btn_w, btn_h)
-        btn_rects.append(r)
-
-    selected = 0
-    while True:
-        mx, my = pygame.mouse.get_pos()
-        for e in pygame.event.get():
-            if e.type == pygame.QUIT:
-                pygame.quit(); raise SystemExit
-            if e.type == pygame.KEYDOWN:
-                if e.key == pygame.K_ESCAPE:
-                    return "resume"
-                if e.key == pygame.K_UP:
-                    selected = (selected - 1) % len(buttons)
-                if e.key == pygame.K_DOWN:
-                    selected = (selected + 1) % len(buttons)
-                if e.key == pygame.K_RETURN:
-                    return buttons[selected][1]
-            if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
-                for i, r in enumerate(btn_rects):
-                    if r.collidepoint(e.pos):
-                        return buttons[i][1]
-            if e.type == pygame.MOUSEMOTION:
-                for i, r in enumerate(btn_rects):
-                    if r.collidepoint(mx, my):
-                        selected = i
-
-        t = pygame.time.get_ticks()
-        window.blit(background, (0, 0))
-        window.blit(overlay, (0, 0))
-
-        pulse = 0.5 + 0.5 * math.sin(t * 0.004)
-        title = title_font.render("PAUSED", True, (255, 255, 255))
-        title.set_alpha(int(180 + 75 * pulse))
-        window.blit(title, title.get_rect(center=(sw // 2, start_y - max(50, sh // 7))))
-
-        for i, (label, _) in enumerate(buttons):
-            r = btn_rects[i]
-            hovered = r.collidepoint(mx, my)
-            is_sel = i == selected or hovered
-            if is_sel:
-                selected = i
-
-            btn_surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
-            if is_sel:
-                glow = int(40 + 25 * pulse)
-                btn_surf.fill((140, 100, 255, glow))
-            else:
-                btn_surf.fill((255, 255, 255, 10))
-            window.blit(btn_surf, r.topleft)
-
-            bdr = (180, 140, 255, 200) if is_sel else (100, 100, 120, 100)
-            pygame.draw.rect(window, bdr, r, 2, border_radius=8)
-
-            col = (255, 255, 255) if is_sel else (170, 170, 180)
-            lbl = btn_font.render(label, True, col)
-            window.blit(lbl, lbl.get_rect(center=r.center))
-
-        hint = hint_font.render("Press ESC to resume", True, (140, 140, 160))
-        window.blit(hint, hint.get_rect(center=(sw // 2, btn_rects[-1].bottom + max(20, sh // 15))))
-
-        pygame.display.flip()
-        clock.tick(60)
-
-
-def startMenu(window, clock):
-    sw, sh = window.get_size()
-    bg = pygame.transform.scale(pygame.image.load("assets/start_menu/start_backround.png").convert(), (sw, sh))
-    font = pygame.font.SysFont("Monocraft", max(18, sw // 30))
-    ctrl_title_font = pygame.font.SysFont("Monocraft", max(12, sw // 38))
-    ctrl_font = pygame.font.SysFont("Monocraft", max(9, sw // 55))
-    title_font = pygame.font.SysFont("Monocraft", max(32, sw // 14))
-    sub_font = pygame.font.SysFont("Monocraft", max(10, sw // 50))
-    card_font = pygame.font.SysFont("Monocraft", max(14, sw // 38))
-
-    controls = [
-        ("WASD", "Move"), ("Mouse", "Rotate Camera"), ("Left Click", "Attack"),
-        ("Q", "Dash"), ("E", "Switch Weapon"), ("R", "Reload"),
-        ("T", "Unlock / Lock Mouse"), ("ESC", "Pause"),
-    ]
-    ctrl_pad = 14
-    ctrl_line_h = max(16, sh // 22)
-    ctrl_w = max(260, sw // 3)
-    ctrl_h = ctrl_line_h * (len(controls) + 1) + ctrl_pad * 2
-    ctrl_x = 16
-    ctrl_y = sh // 2 - ctrl_h // 2
-    ctrl_bg = pygame.Surface((ctrl_w, ctrl_h), pygame.SRCALPHA)
-    pygame.draw.rect(ctrl_bg, (0, 0, 0, 160), (0, 0, ctrl_w, ctrl_h), border_radius=8)
-    pygame.draw.rect(ctrl_bg, (140, 120, 180, 100), (0, 0, ctrl_w, ctrl_h), 1, border_radius=8)
-
-    selected_mode = None
-    card_w = max(200, sw // 4)
-    card_h = max(56, sh // 8)
-    panel_pad = 16
-    panel_w = card_w + panel_pad * 2
-    panel_h = card_h + panel_pad * 2 + max(16, sh // 24)
-    panel_x = sw - panel_w - 16
-    panel_y = sh // 2 - panel_h // 2
-    chk_rect_god = pygame.Rect(panel_x + panel_pad, panel_y + panel_pad + max(16, sh // 24), card_w, card_h)
-
-    particles = []
-    for _ in range(60):
-        particles.append([random.randint(0, sw), random.randint(0, sh),
-                          random.uniform(0.2, 1.2), random.randint(1, 3),
-                          random.uniform(0, math.tau)])
-
-    vig = pygame.Surface((sw, sh), pygame.SRCALPHA)
-    for border in range(min(sw, sh) // 3):
-        a = max(0, int(120 * (1 - border / (min(sw, sh) / 3))))
-        pygame.draw.rect(vig, (0, 0, 0, a), (border, border, sw - border * 2, sh - border * 2), 1)
-
-    # Gameplay flash system
-    FLASH_INTERVAL_MS = 3500
-    FLASH_DUR_MS = 800
-    FLASH_FADE_MS = 300
-    flash_surf = pygame.Surface((sw, sh))
-
-    def _gen_flash():
-        flash_surf.fill((8, 6, 16))
-        horizon = int(sh * 0.35)
-        pygame.draw.rect(flash_surf, (15, 25, 10), (0, horizon, sw, sh - horizon))
-        cx, cy = sw // 2 + random.randint(-100, 100), sh // 2 + random.randint(-40, 40)
-        pts = []
-        for _ in range(30):
-            px = cx + random.randint(-200, 200)
-            py = cy + random.randint(-120, 120)
-            color = random.choice([(255, 95, 70), (255, 220, 80), (120, 210, 255), (190, 80, 255)])
-            pygame.draw.circle(flash_surf, color, (px, py), random.randint(2, 8))
-            pts.append((px, py, color, random.uniform(1, 4), random.uniform(0, math.tau)))
-        for _ in range(random.randint(3, 6)):
-            ex = random.randint(int(sw * 0.2), int(sw * 0.8))
-            ey = random.randint(int(sh * 0.3), int(sh * 0.7))
-            pygame.draw.circle(flash_surf, (60, 180, 60), (ex, ey), random.randint(15, 35))
-        return pts
-
-    last_flash = pygame.time.get_ticks() - FLASH_INTERVAL_MS + 1000
-    flash_on = False
-    flash_pts = []
-
-    while True:
-        mx, my = pygame.mouse.get_pos()
-        for e in pygame.event.get():
-            if e.type == pygame.QUIT or (e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE):
-                pygame.quit(); raise SystemExit
-            if e.type == pygame.KEYDOWN and e.key == pygame.K_RETURN:
-                return selected_mode
-            if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
-                if chk_rect_god.collidepoint(e.pos):
-                    selected_mode = None if selected_mode == "god" else "god"
-
-        t = pygame.time.get_ticks()
-        dt_flash = t - last_flash
-        if not flash_on and dt_flash >= FLASH_INTERVAL_MS:
-            flash_on = True
-            last_flash = t
-            flash_pts = _gen_flash()
-        if flash_on and t - last_flash >= FLASH_DUR_MS:
-            flash_on = False
-
-        px_off = int(math.sin(t * 0.0003) * 20)
-        window.blit(bg, (px_off - 20, 0))
-
-        if flash_on:
-            el = t - last_flash
-            if el < FLASH_FADE_MS:
-                fa = int(255 * el / FLASH_FADE_MS)
-            elif el > FLASH_DUR_MS - FLASH_FADE_MS:
-                fa = int(255 * (FLASH_DUR_MS - el) / FLASH_FADE_MS)
-            else:
-                fa = 255
-            flash_surf.set_alpha(min(255, max(0, fa)))
-            window.blit(flash_surf, (0, 0))
-
-        for p in particles:
-            p[1] -= p[2]
-            p[0] += math.sin(t * 0.001 + p[4]) * 0.3
-            if p[1] < -5:
-                p[1] = sh + 5
-                p[0] = random.randint(0, sw)
-            pa = max(0, int(50 + 50 * math.sin(t * 0.003 + p[0] * 0.01 + p[4])))
-            s = pygame.Surface((p[3] * 2 + 2, p[3] * 2 + 2), pygame.SRCALPHA)
-            pygame.draw.circle(s, (200, 180, 255, pa), (p[3] + 1, p[3] + 1), p[3])
-            window.blit(s, (int(p[0]) - p[3] - 1, int(p[1]) - p[3] - 1))
-
-        window.blit(vig, (0, 0))
-
-        pulse = 0.5 + 0.5 * math.sin(t * 0.003)
-        title_text = title_font.render("DINOMANCER", True, (255, 240, 200))
-        title_glow = title_font.render("DINOMANCER", True, (180, 120, 255))
-        title_glow.set_alpha(int(60 + 40 * pulse))
-        ty = sh // 5 + int(math.sin(t * 0.002) * 4)
-        window.blit(title_glow, title_glow.get_rect(center=(sw // 2 + 2, ty + 2)))
-        window.blit(title_text, title_text.get_rect(center=(sw // 2, ty)))
-        tagline = sub_font.render("Endless Survival Roguelike", True, (180, 170, 200))
-        tagline.set_alpha(int(140 + 80 * pulse))
-        window.blit(tagline, tagline.get_rect(center=(sw // 2, ty + title_text.get_height() // 2 + 16)))
-
-        window.blit(ctrl_bg, (ctrl_x, ctrl_y))
-        title_surf = ctrl_title_font.render("How To Play", True, (255, 220, 80))
-        window.blit(title_surf, (ctrl_x + ctrl_pad, ctrl_y + ctrl_pad))
-        for idx, (key, desc) in enumerate(controls):
-            ly = ctrl_y + ctrl_pad + ctrl_line_h * (idx + 1)
-            key_surf = ctrl_font.render(key, True, (255, 220, 60))
-            desc_surf = ctrl_font.render(f"  {desc}", True, (210, 210, 220))
-            window.blit(key_surf, (ctrl_x + ctrl_pad, ly))
-            window.blit(desc_surf, (ctrl_x + ctrl_pad + key_surf.get_width(), ly))
-
-        alpha = int(130 + 125 * math.sin(t * 0.004))
-        txt = font.render("Press ENTER to Play", True, (255, 255, 255))
-        txt.set_alpha(alpha)
-        window.blit(txt, txt.get_rect(center=(sw // 2, sh - sh // 7)))
-
-        panel_bg = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-        pygame.draw.rect(panel_bg, (0, 0, 0, 170), (0, 0, panel_w, panel_h), border_radius=10)
-        pygame.draw.rect(panel_bg, (180, 140, 255, 90), (0, 0, panel_w, panel_h), 1, border_radius=10)
-        window.blit(panel_bg, (panel_x, panel_y))
-        panel_title = ctrl_title_font.render("Pick Game add-ons", True, (255, 220, 80))
-        window.blit(panel_title, (panel_x + panel_w // 2 - panel_title.get_width() // 2, panel_y + panel_pad - 2))
-
-        god_active = selected_mode == "god"
-        god_hovered = chk_rect_god.collidepoint(mx, my)
-        cs = pygame.Surface((chk_rect_god.w, chk_rect_god.h), pygame.SRCALPHA)
-        if god_active:
-            cs.fill((255, 220, 60, int(50 + 30 * pulse)))
-        elif god_hovered:
-            cs.fill((255, 255, 255, 18))
-        else:
-            cs.fill((255, 255, 255, 8))
-        window.blit(cs, chk_rect_god.topleft)
-        bdr = (255, 220, 60, 200) if god_active else ((220, 220, 240, 120) if god_hovered else (100, 100, 120, 100))
-        pygame.draw.rect(window, bdr, chk_rect_god, 2, border_radius=8)
-        tc = (255, 220, 60) if god_active else ((240, 240, 250) if god_hovered else (190, 190, 200))
-        lbl = card_font.render("God Mode", True, tc)
-        window.blit(lbl, (chk_rect_god.x + 40, chk_rect_god.centery - lbl.get_height() // 2))
-
-        pygame.display.flip()
-        clock.tick(60)
-
-
-def toRenderObj(actor):
-    return {"world_x": actor.rect.centerx,
-            "world_y": actor.rect.centery,
-            "image": actor.current_image}
-
-
-def spawnPos(player):
-    return (
-        player.rect.centerx + random.choice([-1, 1]) * random.randint(800, 1500),
-        player.rect.centery + random.choice([-1, 1]) * random.randint(800, 1500),
-    )
-
-
-def spawnTreeMobAmbushPos(player, camera):
-    forward_x = math.sin(camera.camYAW)
-    forward_y = -math.cos(camera.camYAW)
-    side_x = math.cos(camera.camYAW)
-    side_y = math.sin(camera.camYAW)
-    dist = random.randint(TREE_MOB_FRONT_MIN_DIST, TREE_MOB_FRONT_MAX_DIST)
-    side = random.randint(-TREE_MOB_FRONT_SIDE_JITTER, TREE_MOB_FRONT_SIDE_JITTER)
-    return (
-        player.rect.centerx + int(forward_x * dist + side_x * side),
-        player.rect.centery + int(forward_y * dist + side_y * side),
-    )
-
-
-def applyTreeMobRoot(player, vfx, screenShake):
-    if player.apply_debuff(TREE_MOB_DEBUFF_DURATION_MS):
-        vfx.tree_mob_debuff(player.rect.centerx, player.rect.centery)
-        screenShake.trigger()
-        return True
-    return False
-
-
-pygame.init()
-pygame.mixer.init()
-pygame.mixer.set_num_channels(16)
-window = createFullscreenWindow()
-sw, sh = window.get_size()
-clock = pygame.time.Clock()
-
-_cs = 28
-_ch = _cs // 2
-_cursor_surf = pygame.Surface((_cs, _cs), pygame.SRCALPHA)
-_gap = 4
-pygame.draw.line(_cursor_surf, (0, 0, 0, 200), (0, _ch), (_ch - _gap - 1, _ch), 3)
-pygame.draw.line(_cursor_surf, (0, 0, 0, 200), (_ch + _gap + 1, _ch), (_cs - 1, _ch), 3)
-pygame.draw.line(_cursor_surf, (0, 0, 0, 200), (_ch, 0), (_ch, _ch - _gap - 1), 3)
-pygame.draw.line(_cursor_surf, (0, 0, 0, 200), (_ch, _ch + _gap + 1), (_ch, _cs - 1), 3)
-pygame.draw.line(_cursor_surf, (255, 255, 255), (1, _ch), (_ch - _gap, _ch), 2)
-pygame.draw.line(_cursor_surf, (255, 255, 255), (_ch + _gap, _ch), (_cs - 2, _ch), 2)
-pygame.draw.line(_cursor_surf, (255, 255, 255), (_ch, 1), (_ch, _ch - _gap), 2)
-pygame.draw.line(_cursor_surf, (255, 255, 255), (_ch, _ch + _gap), (_ch, _cs - 2), 2)
-pygame.draw.circle(_cursor_surf, (255, 60, 60), (_ch, _ch), 2)
-pygame.mouse.set_cursor(pygame.cursors.Cursor((_ch, _ch), _cursor_surf))
-
-
-def setMouseLock(locked, center=None):
-    pygame.event.set_grab(locked)
-    pygame.mouse.set_visible(True)
-    if locked and center is not None:
-        pygame.mouse.set_pos(center)
-    pygame.mouse.get_rel()
-
-
-sfx_casting = pygame.mixer.Sound("assets/Necromancer/SFX/necromancer_casting.mp3")
-sfx_death = pygame.mixer.Sound("assets/enemies/slime-SFX/slime_death.mp3")
-sfx_beam = pygame.mixer.Sound("assets/attacks/beam-SFX/beam.mp3")
-attack_sfx_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "attacks")
-bullet_sfx_path = os.path.join(attack_sfx_dir, "bullet.mp3")
-dash_sfx_path = os.path.join(attack_sfx_dir, "dash.mp3")
-sfx_bullet = pygame.mixer.Sound(bullet_sfx_path)
-sfx_dash = pygame.mixer.Sound(dash_sfx_path)
-beam_channel = pygame.mixer.Channel(1)
-necro_beam_channel = pygame.mixer.Channel(2)
-bullet_channel = pygame.mixer.Channel(3)
-dash_channel = pygame.mixer.Channel(4)
-
-while True:
-    setMouseLock(False)
-    pygame.mixer.music.stop()
-    pygame.mixer.stop()
-    selected_mode = startMenu(window, clock)
-    god_mode = selected_mode == "god"
-
-    pygame.mixer.music.load("assets/Necromancer/SFX/before_boss_themesong.mp3")
-    pygame.mixer.music.set_volume(0.67)
-    pygame.mixer.music.play(-1)
-
-    player = Player(700, 700, 12)
-    slimes = []
-    ghouls = []
-    tree_mobs = []
-
-    xp_orbs = []
-    health_pickups = []
-    necro_projectiles = []
-    slimeTimer = 0
-    treeMobTimer = 0
-    necromancer = None
-    frameCount = 0
-    bossWarned = False
-    bossThemePlayed = False
-    tileMap = TileMap()
-    camera = Camera(sw, sh)
-    renderer = PerspectiveRenderer(sw, sh)
-    beam = BeamAttack(sfx_bullet, bullet_channel)
-    dash = Dash()
-    dash_unlocked = False
-    screenShake = ScreenShake()
-    levelUpFlash = LevelUpFlash()
-    debuffOverlay = DebuffOverlay()
-    vfx = WorldVFX()
-    necroFireTimer = 0
-
-    waveAnnouncer = WaveAnnouncer()
-    killStreak = KillStreak()
-    ammoSys = AmmoSystem(clip_size=6)
-    runTimer = RunTimer()
-    lighting = DynamicLighting(sw, sh)
-    skillPicker = SkillPicker()
-    skillPicker.preload()
-    mapDecos = MapDecorations()
-    currentWave = 0
-
-    if god_mode:
-        from main_actor import LEVEL_DAMAGE
-        player.level = 5
-        player.damage = LEVEL_DAMAGE[5]
-        player.speed += 3
-        player.max_hp = 999
-        player.hp = 999
-        beam.has_bullet = True
-        beam.weaponMode = "bullet"
-        dash_unlocked = True
-        ammoSys.clip_size = 99
-        ammoSys.ammo = 99
-        bossWarned = True
-        necromancer = Necromancer(
-            player.rect.centerx + 2000,
-            player.rect.centery + 2000)
-        currentWave = BOSS_SPAWN_WAVE
-        pygame.mixer.music.load("assets/Necromancer/SFX/boss_appear_theme.mp3")
-        pygame.mixer.music.set_volume(1.0)
-        pygame.mixer.music.play(-1)
-        renderer.setGround("assets/world assets/white_ground.png")
-        tileMap.setTreeImage("assets/world assets/magical_spruce_tree.png")
-
-    running = True
-    skill_card_rects = []
-    mouseLockCenter = (sw // 2, sh // 2)
-    mouseLocked = True
-    setMouseLock(mouseLocked, mouseLockCenter)
-
-    while running:
-        if skillPicker.active:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    pygame.quit(); raise SystemExit
-                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                    pause_choice = pauseMenu(window, clock)
-                    if pause_choice == "retry":
-                        running = False
-                        _pause_action = "retry"
-                        break
-                    elif pause_choice == "menu":
-                        running = False
-                        _pause_action = "menu"
-                        break
-                chosen = skillPicker.handle_event(event, skill_card_rects)
-                if chosen:
-                    result = skillPicker.apply_skill(chosen, player, dash, ammoSys)
-                    if result == "unlock_bullet":
-                        beam.has_bullet = True
-                        beam.weaponMode = "bullet"
-                    elif result == "unlock_dash":
-                        dash_unlocked = True
-                    levelUpFlash.trigger()
-                    vfx.level_up(player.rect.centerx, player.rect.centery)
-            skill_card_rects = skillPicker.draw(window)
-            levelUpFlash.draw(window)
-            pygame.display.flip()
-            clock.tick(60)
-            continue
-
-        frameCount += 1
-
-        newWave = frameCount // WAVE_INTERVAL + 1
-        if newWave > currentWave:
-            currentWave = newWave
-            waveAnnouncer.announce(currentWave)
-
-        if currentWave >= BOSS_SPAWN_WAVE and necromancer is None and not bossWarned:
-            bossWarned = True
-            showText(window, clock, "WARNING", sw // 20, 2000)
-            showText(window, clock, "A BOSS IS ABOUT TO SPAWN", sw // 50, 2000)
-            necromancer = Necromancer(
-                player.rect.centerx + 2000,
-                player.rect.centery + 2000)
-            vfx.boss_spawn(necromancer.rect.centerx, necromancer.rect.centery)
-            screenShake.trigger()
-            pygame.mixer.music.load("assets/Necromancer/SFX/boss_appear_theme.mp3")
-            pygame.mixer.music.set_volume(1.0)
-            pygame.mixer.music.play(-1)
-            renderer.setGround("assets/world assets/white_ground.png")
-            tileMap.setTreeImage("assets/world assets/magical_spruce_tree.png")
-
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit(); raise SystemExit
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                pause_result = pauseMenu(window, clock)
-                if pause_result == "retry":
-                    running = False
-                    break
-                elif pause_result == "menu":
-                    running = False
-                    break
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_q:
-                if dash_unlocked:
-                    dash.try_activate(player, camera.camYAW, sfx_dash, dash_channel)
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_t:
-                mouseLocked = not mouseLocked
-                setMouseLock(mouseLocked, mouseLockCenter)
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_e:
-                beam.switchWeapon()
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
-                ammoSys.start_reload()
-
-        mdx, mdy = pygame.mouse.get_rel()
-        if mouseLocked:
-            camera.camYAW += mdx * 0.002
-            camera.camPITCH = max(-250, min(250, camera.camPITCH - mdy * 0.3))
-            pygame.mouse.set_pos(mouseLockCenter)
-            pygame.mouse.get_rel()
-        else:
-            mouse = pygame.mouse.get_pressed()
-            if mouse[2]:
-                camera.camYAW += mdx * 0.002
-                camera.camPITCH = max(-250, min(250, camera.camPITCH - mdy * 0.3))
-
-        player.update_debuff()
-        if necromancer and necromancer.isCasting:
-            saved_speed = player.speed
-            player.speed = max(2, player.speed // 2)
-            player.wasd(camera.camYAW)
-            player.speed = saved_speed
-        else:
-            player.wasd(camera.camYAW)
-        if dash_unlocked:
-            dash.update(player)
-        camera.update(player)
-        ammoSys.update()
-        vfx.update()
-
-        prevCount = len(slimes) + len(ghouls) + len(tree_mobs)
-        slimes = [s for s in slimes if s.hp > 0]
-        ghouls = [g for g in ghouls if g.hp > 0]
-        tree_mobs = [t for t in tree_mobs if t.hp > 0]
-        if len(slimes) + len(ghouls) + len(tree_mobs) < prevCount:
-            sfx_death.play()
-
-        is_inv = dash_unlocked and dash.is_invincible
-
-        diff_mult = runTimer.difficulty_mult()
-
-        slimeTimer += 1
-        spawn_interval = max(60, int(200 / diff_mult))
-        if slimeTimer >= spawn_interval:
-            slimeTimer = 0
-            if len(slimes) < MAX_SLIMES:
-                slimes.append(Slime(*spawnPos(player)))
-
-        if currentWave >= GHOUL_START_WAVE and frameCount % max(100, int(300 / diff_mult)) == 0:
-            if len(ghouls) < MAX_GHOULS:
-                ghouls.append(Ghoul(*spawnPos(player)))
-
-        # TreeMob spawning (wave 6+)
-        if currentWave >= TREE_MOB_START_WAVE:
-            treeMobTimer += 1
-            tree_interval = max(TREE_MOB_MIN_INTERVAL, int(TREE_MOB_BASE_INTERVAL / diff_mult))
-            if treeMobTimer >= tree_interval and len(tree_mobs) < MAX_TREE_MOBS:
-                treeMobTimer = 0
-                tx, ty = spawnTreeMobAmbushPos(player, camera)
-                tree_mobs.append(TreeMob(tx, ty, centered=True))
-                applyTreeMobRoot(player, vfx, screenShake)
-
-        px, py = player.rect.centerx, player.rect.centery
-        for s in slimes:
-            if abs(s.rect.centerx - px) + abs(s.rect.centery - py) < ENEMY_CULL_DIST:
-                s.update(player)
-        for g in ghouls:
-            if abs(g.rect.centerx - px) + abs(g.rect.centery - py) < ENEMY_CULL_DIST:
-                g.update(player)
-        for tm in tree_mobs:
-            if abs(tm.rect.centerx - px) + abs(tm.rect.centery - py) < ENEMY_CULL_DIST:
-                tm.update(player)
-
-        if necromancer:
-            newGhouls = necromancer.update(player)
-            if newGhouls:
-                sfx_casting.play()
-            ghouls.extend(newGhouls)
-
-            if necromancer.cast_just_ended:
-                if not is_inv:
-                    player.hp = max(0, player.hp - 1)
-                    player.last_hit_time = pygame.time.get_ticks()
-                    player.hitTime = pygame.time.get_ticks()
-                    screenShake.trigger()
-
-            necroFireTimer += 1
-            if necroFireTimer >= NECRO_FIRE_INTERVAL:
-                necroFireTimer = 0
-                necro_projectiles.append(NecromancerProjectile(
-                    necromancer.rect.centerx, necromancer.rect.centery,
-                    player.rect.centerx, player.rect.centery))
-
-        for proj in necro_projectiles:
-            proj.update()
-            if proj.alive:
-                vfx.projectile_trail(proj.x, proj.y)
-            if proj.alive and proj.check_hit_player(player):
-                if not is_inv:
-                    player.hp = max(0, player.hp - NECRO_PROJ_DAMAGE)
-                    player.last_hit_time = pygame.time.get_ticks()
-                    player.hitTime = pygame.time.get_ticks()
-                    for _ in range(3):
-                        screenShake.trigger()
-        necro_projectiles = [p for p in necro_projectiles if p.alive]
-
-        all_enemies = slimes + ghouls + tree_mobs
-        allEnemies = all_enemies + ([necromancer] if necromancer else [])
-        kills = beam.update(player, allEnemies, camera, renderer, ammoSys)
-
-        for enemy in kills:
-            vfx.death_burst(enemy.rect.centerx, enemy.rect.centery, boss=enemy is necromancer)
-            xp_orbs.append(XPOrb(enemy.rect.centerx, enemy.rect.centery))
-            killStreak.register_kill()
-            if random.random() < HEALTH_DROP_CHANCE:
-                health_pickups.append(HealthPickup(
-                    enemy.rect.centerx + random.randint(-50, 50),
-                    enemy.rect.centery + random.randint(-50, 50)))
-
-        for orb in xp_orbs:
-            gained = orb.update(player)
-            if gained > 0:
-                vfx.xp_pickup(orb.x, orb.y)
-                player.addXP(gained)
-        xp_orbs = [o for o in xp_orbs if o.alive]
-
-        for hp in health_pickups:
-            if hp.update(player):
-                vfx.heal_pickup(hp.x, hp.y)
-        health_pickups = [hp for hp in health_pickups if hp.alive]
-
-        if player.pending_levelup:
-            player.pending_levelup = False
-            levelUpFlash.trigger()
-            skillPicker.open(beam.has_bullet, dash_unlocked, window)
-
-        if beam.weaponMode == "beam" and beam.isAttacking:
-            if not beam_channel.get_busy():
-                beam_channel.play(sfx_beam, loops=-1)
-        else:
-            beam_channel.stop()
-
-        if necromancer and necromancer.isCasting and necromancer.hp > 0:
-            if not necro_beam_channel.get_busy():
-                necro_beam_channel.play(sfx_beam, loops=-1)
-        else:
-            necro_beam_channel.stop()
-
-        now = pygame.time.get_ticks()
-        if not is_inv and now - player.last_hit_time >= SLIME_HIT_COOLDOWN:
-            hit_range_2 = SLIME_HIT_RANGE * 2
-            hit_range_sq = SLIME_HIT_RANGE * SLIME_HIT_RANGE
-            for enemy in all_enemies:
-                if enemy.hp <= 0:
-                    continue
-                # TreeMob: debuff instead of damage
-                if isinstance(enemy, TreeMob):
-                    dx = enemy.rect.centerx - player.rect.centerx
-                    dy = enemy.rect.centery - player.rect.centery
-                    if abs(dx) + abs(dy) > TREE_MOB_HIT_RANGE * 2:
-                        continue
-                    if dx * dx + dy * dy <= TREE_MOB_HIT_RANGE * TREE_MOB_HIT_RANGE:
-                        applyTreeMobRoot(player, vfx, screenShake)
-                    continue
-                dx = enemy.rect.centerx - player.rect.centerx
-                dy = enemy.rect.centery - player.rect.centery
-                if abs(dx) + abs(dy) > hit_range_2:
-                    continue
-                if dx * dx + dy * dy <= hit_range_sq:
-                    player.hp = max(0, player.hp - 1)
-                    player.last_hit_time = now
-                    player.hitTime = now
-                    screenShake.trigger()
-                    break
-
-        window.fill((0, 0, 0))
-        trees = tileMap.get_trees_in_range(camera.world_x, camera.world_y, TREE_VIEW_DISTANCE)
-        decos = mapDecos.get_decorations_in_range(camera.world_x, camera.world_y, TREE_VIEW_DISTANCE)
-        renderList = trees + decos + [toRenderObj(player)]
-        renderList.extend(toRenderObj(s) for s in slimes)
-        renderList.extend(toRenderObj(g) for g in ghouls)
-        renderList.extend(toRenderObj(tm) for tm in tree_mobs)
-        if dash_unlocked:
-            renderList.extend(dash.get_ghost_render_objs())
-
-        renderList.extend(o.get_render_obj() for o in xp_orbs)
-        renderList.extend(hp.get_render_obj() for hp in health_pickups)
-        renderList.extend(p.get_render_obj() for p in necro_projectiles)
-        if necromancer:
-            renderList.append(toRenderObj(necromancer))
-
-        renderer.render(camera, renderList, window)
-
-        playerSP = getScreenPos(player, camera, renderer)
-        if playerSP:
-            lighting.draw(window, playerSP["x"], playerSP["y"])
-        vfx.draw_world(window, camera, renderer)
-
-        if necromancer and necromancer.isCasting and necromancer.hp > 0:
-            necro_sp = getScreenPos(necromancer, camera, renderer)
-            if necro_sp and playerSP:
-                bf = necromancer.get_current_beam_frame()
-                sx, sy = necro_sp["x"], necro_sp["y"]
-                ex, ey = playerSP["x"], playerSP["y"]
-                blen = math.hypot(ex - sx, ey - sy)
-                if blen > 5:
-                    dx_b = (ex - sx) / blen
-                    dy_b = (ey - sy) / blen
-                    angle = -math.degrees(math.atan2(dy_b, dx_b))
-                    n_segs = 10
-                    seg_len = blen / n_segs
-                    for i in range(n_segs):
-                        t = i / n_segs
-                        h_scale = max(1.5, min(3.0, necro_sp["scale"] * 1.2)) * (1.0 - t * 0.5)
-                        segW = max(4, int(seg_len + 2))
-                        segH = max(2, int(bf.get_height() * h_scale))
-                        seg = pygame.transform.scale(bf, (segW, segH))
-                        tint = pygame.Surface((segW, segH), pygame.SRCALPHA)
-                        tint.fill((120, 40, 200, 60))
-                        seg.blit(tint, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
-                        rotated = pygame.transform.rotate(seg, angle)
-                        cx = sx + dx_b * (seg_len * (i + 0.5))
-                        cy = sy + dy_b * (seg_len * (i + 0.5))
-                        window.blit(rotated, rotated.get_rect(center=(int(cx), int(cy))))
-
-        beam.draw(window)
-        beam.drawHealthBars(window, all_enemies, camera, renderer)
-        beam.drawBossHp(window, necromancer)
-        beam.drawXpBar(window, player)
-        beam.drawPlayerHp(window, player)
-        levelUpFlash.draw(window)
-        debuffOverlay.draw(window, player)
-
-        waveAnnouncer.draw(window)
-        killStreak.draw(window)
-        ammoSys.draw(window)
-        runTimer.draw(window)
-
-        shake_offset = screenShake.update()
-        if shake_offset != (0, 0):
-            frame_copy = window.copy()
-            window.fill((0, 0, 0))
-            window.blit(frame_copy, shake_offset)
-
-        if player.hp <= 0:
-            pygame.mixer.music.stop()
-            pygame.mixer.stop()
-            showText(window, clock, "You Died.", sw // 15, 3000)
-            running = False
-
-        if necromancer and necromancer.hp <= 0:
-            necromancer = None
-            bossWarned = False
-            vfx.boss_spawn(player.rect.centerx, player.rect.centery)
-            pygame.mixer.music.load("assets/Necromancer/SFX/before_boss_themesong.mp3")
-            pygame.mixer.music.set_volume(0.67)
-            pygame.mixer.music.play(-1)
-            renderer.setGround("assets/ground.png")
-            tileMap.setTreeImage("assets/world assets/tree_classic.png")
-
-        clock.tick(60)
-        pygame.display.flip()
-
-pygame.quit()
+import math
+import os
+import random
+import sys
+import pygame
+from attacks import BeamAttack, getScreenPos
+from enemies import Ghoul, Necromancer, Slime, TreeMob, NecromancerProjectile, NECRO_PROJ_DAMAGE, TREE_MOB_DEBUFF_DURATION_MS, TREE_MOB_HIT_RANGE
+from main_actor import Player
+from renderer import PerspectiveRenderer
+from skills import Dash
+from tilemap import TileMap
+from effects import ScreenShake, LevelUpFlash, WorldVFX, DebuffOverlay
+from game_systems import (
+    XPOrb, LargeXPOrb, HealthPickup, WaveAnnouncer, KillStreak,
+    AmmoSystem, RunTimer, DynamicLighting,
+    SkillPicker, MapDecorations,
+)
+
+
+def _set_resource_cwd():
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        os.chdir(sys._MEIPASS)
+    else:
+        os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+
+_set_resource_cwd()
+
+TREE_VIEW_DISTANCE = 8000
+SLIME_HIT_RANGE = 200
+SLIME_HIT_COOLDOWN = 500
+HEALTH_DROP_CHANCE = 0.05
+
+WAVE_INTERVAL = 1800
+GHOUL_START_WAVE = 3
+BOSS_SPAWN_WAVE = 12
+TREE_MOB_START_WAVE = 6
+
+NECRO_FIRE_INTERVAL = 150
+
+MAX_SLIMES = 100
+MAX_GHOULS = 50
+MAX_TREE_MOBS = 6
+TREE_MOB_BASE_INTERVAL = 900
+TREE_MOB_MIN_INTERVAL = 420
+TREE_MOB_FRONT_MIN_DIST = 260
+TREE_MOB_FRONT_MAX_DIST = 430
+TREE_MOB_FRONT_SIDE_JITTER = 180
+ENEMY_CULL_DIST = 6000
+
+os.environ["SLD_AUDIODRIVER"] = "dummy"
+
+
+def createFullscreenWindow():
+    info = pygame.display.Info()
+    width = max(640, info.current_w // 2)
+    height = max(360, info.current_h // 2)
+    return pygame.display.set_mode((width, height), pygame.FULLSCREEN | pygame.SCALED)
+
+
+class Camera:
+    def __init__(self, w, h):
+        self.width, self.height = w, h
+        self.world_x, self.world_y = 0, 0
+        self.camDistance = 500
+        self.camPITCH, self.camYAW = 0, 0
+
+    def update(self, player):
+        self.world_x = player.rect.centerx - math.sin(self.camYAW) * self.camDistance
+        self.world_y = player.rect.centery + math.cos(self.camYAW) * self.camDistance
+
+
+def showText(window, clock, text, size, ms=2000, waitKey=False):
+    sw, sh = window.get_size()
+    rendered = pygame.font.SysFont("Monocraft", size).render(text, True, (255, 255, 255))
+    rect = rendered.get_rect(center=(sw // 2, sh // 2))
+    start = pygame.time.get_ticks()
+    while True:
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT:
+                pygame.quit(); raise SystemExit
+            if e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE:
+                if waitKey: return
+        if not waitKey and pygame.time.get_ticks() - start >= ms:
+            break
+        window.fill((0, 0, 0))
+        window.blit(rendered, rect)
+        pygame.display.flip()
+        clock.tick(60)
+
+
+def pauseMenu(window, clock):
+    """Returns 'resume', 'retry', or 'menu'."""
+    sw, sh = window.get_size()
+    background = window.copy()
+    overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 160))
+
+    title_font = pygame.font.SysFont("Monocraft", max(20, sw // 18))
+    btn_font = pygame.font.SysFont("Monocraft", max(14, sw // 32))
+    hint_font = pygame.font.SysFont("Monocraft", max(9, sw // 55))
+
+    buttons = [
+        ("Resume", "resume"),
+        ("Retry", "retry"),
+        ("Main Menu", "menu"),
+    ]
+    btn_w = max(200, sw // 3)
+    btn_h = max(44, sh // 10)
+    btn_gap = max(12, sh // 30)
+    total_h = len(buttons) * btn_h + (len(buttons) - 1) * btn_gap
+    start_y = sh // 2 - total_h // 2 + max(30, sh // 8)
+
+    btn_rects = []
+    for i in range(len(buttons)):
+        r = pygame.Rect(sw // 2 - btn_w // 2, start_y + i * (btn_h + btn_gap), btn_w, btn_h)
+        btn_rects.append(r)
+
+    selected = 0
+    while True:
+        mx, my = pygame.mouse.get_pos()
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT:
+                pygame.quit(); raise SystemExit
+            if e.type == pygame.KEYDOWN:
+                if e.key == pygame.K_ESCAPE:
+                    return "resume"
+                if e.key == pygame.K_UP:
+                    selected = (selected - 1) % len(buttons)
+                if e.key == pygame.K_DOWN:
+                    selected = (selected + 1) % len(buttons)
+                if e.key == pygame.K_RETURN:
+                    return buttons[selected][1]
+            if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
+                for i, r in enumerate(btn_rects):
+                    if r.collidepoint(e.pos):
+                        return buttons[i][1]
+            if e.type == pygame.MOUSEMOTION:
+                for i, r in enumerate(btn_rects):
+                    if r.collidepoint(mx, my):
+                        selected = i
+
+        t = pygame.time.get_ticks()
+        window.blit(background, (0, 0))
+        window.blit(overlay, (0, 0))
+
+        pulse = 0.5 + 0.5 * math.sin(t * 0.004)
+        title = title_font.render("PAUSED", True, (255, 255, 255))
+        title.set_alpha(int(180 + 75 * pulse))
+        window.blit(title, title.get_rect(center=(sw // 2, start_y - max(50, sh // 7))))
+
+        for i, (label, _) in enumerate(buttons):
+            r = btn_rects[i]
+            hovered = r.collidepoint(mx, my)
+            is_sel = i == selected or hovered
+            if is_sel:
+                selected = i
+
+            btn_surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+            if is_sel:
+                glow = int(40 + 25 * pulse)
+                btn_surf.fill((140, 100, 255, glow))
+            else:
+                btn_surf.fill((255, 255, 255, 10))
+            window.blit(btn_surf, r.topleft)
+
+            bdr = (180, 140, 255, 200) if is_sel else (100, 100, 120, 100)
+            pygame.draw.rect(window, bdr, r, 2, border_radius=8)
+
+            col = (255, 255, 255) if is_sel else (170, 170, 180)
+            lbl = btn_font.render(label, True, col)
+            window.blit(lbl, lbl.get_rect(center=r.center))
+
+        hint = hint_font.render("Press ESC to resume", True, (140, 140, 160))
+        window.blit(hint, hint.get_rect(center=(sw // 2, btn_rects[-1].bottom + max(20, sh // 15))))
+
+        pygame.display.flip()
+        clock.tick(60)
+
+
+def startMenu(window, clock):
+    sw, sh = window.get_size()
+    bg = pygame.transform.scale(pygame.image.load("assets/start_menu/start_backround.png").convert(), (sw, sh))
+    font = pygame.font.SysFont("Monocraft", max(18, sw // 30))
+    ctrl_title_font = pygame.font.SysFont("Monocraft", max(12, sw // 38))
+    ctrl_font = pygame.font.SysFont("Monocraft", max(9, sw // 55))
+    title_font = pygame.font.SysFont("Monocraft", max(32, sw // 14))
+    sub_font = pygame.font.SysFont("Monocraft", max(10, sw // 50))
+    card_font = pygame.font.SysFont("Monocraft", max(14, sw // 38))
+
+    controls = [
+        ("WASD", "Move"), ("Mouse", "Rotate Camera"), ("Left Click", "Attack"),
+        ("Q", "Dash"), ("E", "Switch Weapon"), ("R", "Reload"),
+        ("T", "Unlock / Lock Mouse"), ("ESC", "Pause"),
+    ]
+    ctrl_pad = 14
+    ctrl_line_h = max(16, sh // 22)
+    ctrl_w = max(260, sw // 3)
+    ctrl_h = ctrl_line_h * (len(controls) + 1) + ctrl_pad * 2
+    ctrl_x = 16
+    ctrl_y = sh // 2 - ctrl_h // 2
+    ctrl_bg = pygame.Surface((ctrl_w, ctrl_h), pygame.SRCALPHA)
+    pygame.draw.rect(ctrl_bg, (0, 0, 0, 160), (0, 0, ctrl_w, ctrl_h), border_radius=8)
+    pygame.draw.rect(ctrl_bg, (140, 120, 180, 100), (0, 0, ctrl_w, ctrl_h), 1, border_radius=8)
+
+    selected_mode = None
+    card_w = max(200, sw // 4)
+    card_h = max(56, sh // 8)
+    panel_pad = 16
+    panel_w = card_w + panel_pad * 2
+    panel_h = card_h + panel_pad * 2 + max(16, sh // 24)
+    panel_x = sw - panel_w - 16
+    panel_y = sh // 2 - panel_h // 2
+    chk_rect_god = pygame.Rect(panel_x + panel_pad, panel_y + panel_pad + max(16, sh // 24), card_w, card_h)
+
+    particles = []
+    for _ in range(60):
+        particles.append([random.randint(0, sw), random.randint(0, sh),
+                          random.uniform(0.2, 1.2), random.randint(1, 3),
+                          random.uniform(0, math.tau)])
+
+    vig = pygame.Surface((sw, sh), pygame.SRCALPHA)
+    for border in range(min(sw, sh) // 3):
+        a = max(0, int(120 * (1 - border / (min(sw, sh) / 3))))
+        pygame.draw.rect(vig, (0, 0, 0, a), (border, border, sw - border * 2, sh - border * 2), 1)
+
+    
+    FLASH_INTERVAL_MS = 3500
+    FLASH_DUR_MS = 800
+    FLASH_FADE_MS = 300
+    flash_surf = pygame.Surface((sw, sh))
+
+    def _gen_flash():
+        flash_surf.fill((8, 6, 16))
+        horizon = int(sh * 0.35)
+        pygame.draw.rect(flash_surf, (15, 25, 10), (0, horizon, sw, sh - horizon))
+        cx, cy = sw // 2 + random.randint(-100, 100), sh // 2 + random.randint(-40, 40)
+        pts = []
+        for _ in range(30):
+            px = cx + random.randint(-200, 200)
+            py = cy + random.randint(-120, 120)
+            color = random.choice([(255, 95, 70), (255, 220, 80), (120, 210, 255), (190, 80, 255)])
+            pygame.draw.circle(flash_surf, color, (px, py), random.randint(2, 8))
+            pts.append((px, py, color, random.uniform(1, 4), random.uniform(0, math.tau)))
+        for _ in range(random.randint(3, 6)):
+            ex = random.randint(int(sw * 0.2), int(sw * 0.8))
+            ey = random.randint(int(sh * 0.3), int(sh * 0.7))
+            pygame.draw.circle(flash_surf, (60, 180, 60), (ex, ey), random.randint(15, 35))
+        return pts
+
+    last_flash = pygame.time.get_ticks() - FLASH_INTERVAL_MS + 1000
+    flash_on = False
+    flash_pts = []
+
+    while True:
+        mx, my = pygame.mouse.get_pos()
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT or (e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE):
+                pygame.quit(); raise SystemExit
+            if e.type == pygame.KEYDOWN and e.key == pygame.K_RETURN:
+                return selected_mode
+            if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
+                if chk_rect_god.collidepoint(e.pos):
+                    selected_mode = None if selected_mode == "god" else "god"
+
+        t = pygame.time.get_ticks()
+        dt_flash = t - last_flash
+        if not flash_on and dt_flash >= FLASH_INTERVAL_MS:
+            flash_on = True
+            last_flash = t
+            flash_pts = _gen_flash()
+        if flash_on and t - last_flash >= FLASH_DUR_MS:
+            flash_on = False
+
+        px_off = int(math.sin(t * 0.0003) * 20)
+        window.blit(bg, (px_off - 20, 0))
+
+        if flash_on:
+            el = t - last_flash
+            if el < FLASH_FADE_MS:
+                fa = int(255 * el / FLASH_FADE_MS)
+            elif el > FLASH_DUR_MS - FLASH_FADE_MS:
+                fa = int(255 * (FLASH_DUR_MS - el) / FLASH_FADE_MS)
+            else:
+                fa = 255
+            flash_surf.set_alpha(min(255, max(0, fa)))
+            window.blit(flash_surf, (0, 0))
+
+        for p in particles:
+            p[1] -= p[2]
+            p[0] += math.sin(t * 0.001 + p[4]) * 0.3
+            if p[1] < -5:
+                p[1] = sh + 5
+                p[0] = random.randint(0, sw)
+            pa = max(0, int(50 + 50 * math.sin(t * 0.003 + p[0] * 0.01 + p[4])))
+            s = pygame.Surface((p[3] * 2 + 2, p[3] * 2 + 2), pygame.SRCALPHA)
+            pygame.draw.circle(s, (200, 180, 255, pa), (p[3] + 1, p[3] + 1), p[3])
+            window.blit(s, (int(p[0]) - p[3] - 1, int(p[1]) - p[3] - 1))
+
+        window.blit(vig, (0, 0))
+
+        pulse = 0.5 + 0.5 * math.sin(t * 0.003)
+        title_text = title_font.render("DINOMANCER", True, (255, 240, 200))
+        title_glow = title_font.render("DINOMANCER", True, (180, 120, 255))
+        title_glow.set_alpha(int(60 + 40 * pulse))
+        ty = sh // 5 + int(math.sin(t * 0.002) * 4)
+        window.blit(title_glow, title_glow.get_rect(center=(sw // 2 + 2, ty + 2)))
+        window.blit(title_text, title_text.get_rect(center=(sw // 2, ty)))
+        tagline = sub_font.render("Endless Survival Roguelike", True, (180, 170, 200))
+        tagline.set_alpha(int(140 + 80 * pulse))
+        window.blit(tagline, tagline.get_rect(center=(sw // 2, ty + title_text.get_height() // 2 + 16)))
+
+        window.blit(ctrl_bg, (ctrl_x, ctrl_y))
+        title_surf = ctrl_title_font.render("How To Play", True, (255, 220, 80))
+        window.blit(title_surf, (ctrl_x + ctrl_pad, ctrl_y + ctrl_pad))
+        for idx, (key, desc) in enumerate(controls):
+            ly = ctrl_y + ctrl_pad + ctrl_line_h * (idx + 1)
+            key_surf = ctrl_font.render(key, True, (255, 220, 60))
+            desc_surf = ctrl_font.render(f"  {desc}", True, (210, 210, 220))
+            window.blit(key_surf, (ctrl_x + ctrl_pad, ly))
+            window.blit(desc_surf, (ctrl_x + ctrl_pad + key_surf.get_width(), ly))
+
+        alpha = int(130 + 125 * math.sin(t * 0.004))
+        txt = font.render("Press ENTER to Play", True, (255, 255, 255))
+        txt.set_alpha(alpha)
+        window.blit(txt, txt.get_rect(center=(sw // 2, sh - sh // 7)))
+
+        panel_bg = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        pygame.draw.rect(panel_bg, (0, 0, 0, 170), (0, 0, panel_w, panel_h), border_radius=10)
+        pygame.draw.rect(panel_bg, (180, 140, 255, 90), (0, 0, panel_w, panel_h), 1, border_radius=10)
+        window.blit(panel_bg, (panel_x, panel_y))
+        panel_title = ctrl_title_font.render("Pick Game add-ons", True, (255, 220, 80))
+        window.blit(panel_title, (panel_x + panel_w // 2 - panel_title.get_width() // 2, panel_y + panel_pad - 2))
+
+        god_active = selected_mode == "god"
+        god_hovered = chk_rect_god.collidepoint(mx, my)
+        cs = pygame.Surface((chk_rect_god.w, chk_rect_god.h), pygame.SRCALPHA)
+        if god_active:
+            cs.fill((255, 220, 60, int(50 + 30 * pulse)))
+        elif god_hovered:
+            cs.fill((255, 255, 255, 18))
+        else:
+            cs.fill((255, 255, 255, 8))
+        window.blit(cs, chk_rect_god.topleft)
+        bdr = (255, 220, 60, 200) if god_active else ((220, 220, 240, 120) if god_hovered else (100, 100, 120, 100))
+        pygame.draw.rect(window, bdr, chk_rect_god, 2, border_radius=8)
+        tc = (255, 220, 60) if god_active else ((240, 240, 250) if god_hovered else (190, 190, 200))
+        lbl = card_font.render("God Mode", True, tc)
+        window.blit(lbl, (chk_rect_god.x + 40, chk_rect_god.centery - lbl.get_height() // 2))
+
+        pygame.display.flip()
+        clock.tick(60)
+
+
+def toRenderObj(actor):
+    return {"world_x": actor.rect.centerx,
+            "world_y": actor.rect.centery,
+            "image": actor.current_image}
+
+
+def spawnPos(player):
+    return (
+        player.rect.centerx + random.choice([-1, 1]) * random.randint(800, 1500),
+        player.rect.centery + random.choice([-1, 1]) * random.randint(800, 1500),
+    )
+
+
+def spawnTreeMobAmbushPos(player, camera):
+    forward_x = math.sin(camera.camYAW)
+    forward_y = -math.cos(camera.camYAW)
+    side_x = math.cos(camera.camYAW)
+    side_y = math.sin(camera.camYAW)
+    dist = random.randint(TREE_MOB_FRONT_MIN_DIST, TREE_MOB_FRONT_MAX_DIST)
+    side = random.randint(-TREE_MOB_FRONT_SIDE_JITTER, TREE_MOB_FRONT_SIDE_JITTER)
+    return (
+        player.rect.centerx + int(forward_x * dist + side_x * side),
+        player.rect.centery + int(forward_y * dist + side_y * side),
+    )
+
+
+def applyTreeMobRoot(player, vfx, screenShake):
+    if player.apply_debuff(TREE_MOB_DEBUFF_DURATION_MS):
+        vfx.tree_mob_debuff(player.rect.centerx, player.rect.centery)
+        screenShake.trigger()
+        return True
+    return False
+
+
+pygame.init()
+pygame.mixer.init()
+pygame.mixer.set_num_channels(16)
+window = createFullscreenWindow()
+sw, sh = window.get_size()
+clock = pygame.time.Clock()
+
+_cs = 28
+_ch = _cs // 2
+_cursor_surf = pygame.Surface((_cs, _cs), pygame.SRCALPHA)
+_gap = 4
+pygame.draw.line(_cursor_surf, (0, 0, 0, 200), (0, _ch), (_ch - _gap - 1, _ch), 3)
+pygame.draw.line(_cursor_surf, (0, 0, 0, 200), (_ch + _gap + 1, _ch), (_cs - 1, _ch), 3)
+pygame.draw.line(_cursor_surf, (0, 0, 0, 200), (_ch, 0), (_ch, _ch - _gap - 1), 3)
+pygame.draw.line(_cursor_surf, (0, 0, 0, 200), (_ch, _ch + _gap + 1), (_ch, _cs - 1), 3)
+pygame.draw.line(_cursor_surf, (255, 255, 255), (1, _ch), (_ch - _gap, _ch), 2)
+pygame.draw.line(_cursor_surf, (255, 255, 255), (_ch + _gap, _ch), (_cs - 2, _ch), 2)
+pygame.draw.line(_cursor_surf, (255, 255, 255), (_ch, 1), (_ch, _ch - _gap), 2)
+pygame.draw.line(_cursor_surf, (255, 255, 255), (_ch, _ch + _gap), (_ch, _cs - 2), 2)
+pygame.draw.circle(_cursor_surf, (255, 60, 60), (_ch, _ch), 2)
+pygame.mouse.set_cursor(pygame.cursors.Cursor((_ch, _ch), _cursor_surf))
+
+
+def setMouseLock(locked, center=None):
+    pygame.event.set_grab(locked)
+    pygame.mouse.set_visible(True)
+    if locked and center is not None:
+        pygame.mouse.set_pos(center)
+    pygame.mouse.get_rel()
+
+
+sfx_casting = pygame.mixer.Sound("assets/Necromancer/SFX/necromancer_casting.mp3")
+sfx_death = pygame.mixer.Sound("assets/enemies/slime-SFX/slime_death.mp3")
+sfx_beam = pygame.mixer.Sound("assets/attacks/beam-SFX/beam.mp3")
+attack_sfx_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "attacks")
+bullet_sfx_path = os.path.join(attack_sfx_dir, "bullet.mp3")
+dash_sfx_path = os.path.join(attack_sfx_dir, "dash.mp3")
+sfx_bullet = pygame.mixer.Sound(bullet_sfx_path)
+sfx_dash = pygame.mixer.Sound(dash_sfx_path)
+beam_channel = pygame.mixer.Channel(1)
+necro_beam_channel = pygame.mixer.Channel(2)
+bullet_channel = pygame.mixer.Channel(3)
+dash_channel = pygame.mixer.Channel(4)
+
+while True:
+    setMouseLock(False)
+    pygame.mixer.music.stop()
+    pygame.mixer.stop()
+    selected_mode = startMenu(window, clock)
+    god_mode = selected_mode == "god"
+
+    pygame.mixer.music.load("assets/Necromancer/SFX/before_boss_themesong.mp3")
+    pygame.mixer.music.set_volume(0.67)
+    pygame.mixer.music.play(-1)
+
+    player = Player(700, 700, 12)
+    slimes = []
+    ghouls = []
+    tree_mobs = []
+
+    xp_orbs = []
+    health_pickups = []
+    necro_projectiles = []
+    slimeTimer = 0
+    treeMobTimer = 0
+    necromancer = None
+    frameCount = 0
+    bossWarned = False
+    bossThemePlayed = False
+    tileMap = TileMap()
+    camera = Camera(sw, sh)
+    renderer = PerspectiveRenderer(sw, sh)
+    beam = BeamAttack(sfx_bullet, bullet_channel)
+    dash = Dash()
+    dash_unlocked = False
+    screenShake = ScreenShake()
+    levelUpFlash = LevelUpFlash()
+    debuffOverlay = DebuffOverlay()
+    vfx = WorldVFX()
+    necroFireTimer = 0
+
+    waveAnnouncer = WaveAnnouncer()
+    killStreak = KillStreak()
+    ammoSys = AmmoSystem(clip_size=6)
+    runTimer = RunTimer()
+    lighting = DynamicLighting(sw, sh)
+    skillPicker = SkillPicker()
+    skillPicker.preload()
+    mapDecos = MapDecorations()
+    currentWave = 0
+
+    if god_mode:
+        from main_actor import LEVEL_DAMAGE
+        player.level = 5
+        player.damage = LEVEL_DAMAGE[5]
+        player.speed += 3
+        player.max_hp = 999
+        player.hp = 999
+        beam.has_bullet = True
+        beam.weaponMode = "bullet"
+        dash_unlocked = True
+        ammoSys.clip_size = 99
+        ammoSys.ammo = 99
+        bossWarned = True
+        necromancer = Necromancer(
+            player.rect.centerx + 2000,
+            player.rect.centery + 2000)
+        currentWave = BOSS_SPAWN_WAVE
+        pygame.mixer.music.load("assets/Necromancer/SFX/boss_appear_theme.mp3")
+        pygame.mixer.music.set_volume(1.0)
+        pygame.mixer.music.play(-1)
+        renderer.setGround("assets/world assets/white_ground.png")
+        tileMap.setTreeImage("assets/world assets/magical_spruce_tree.png")
+
+    running = True
+    skill_card_rects = []
+    mouseLockCenter = (sw // 2, sh // 2)
+    mouseLocked = True
+    setMouseLock(mouseLocked, mouseLockCenter)
+
+    while running:
+        if skillPicker.active:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit(); raise SystemExit
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    pause_choice = pauseMenu(window, clock)
+                    if pause_choice == "retry":
+                        running = False
+                        _pause_action = "retry"
+                        break
+                    elif pause_choice == "menu":
+                        running = False
+                        _pause_action = "menu"
+                        break
+                chosen = skillPicker.handle_event(event, skill_card_rects)
+                if chosen:
+                    result = skillPicker.apply_skill(chosen, player, dash, ammoSys)
+                    if result == "unlock_bullet":
+                        beam.has_bullet = True
+                        beam.weaponMode = "bullet"
+                    elif result == "unlock_dash":
+                        dash_unlocked = True
+                    levelUpFlash.trigger()
+                    vfx.level_up(player.rect.centerx, player.rect.centery)
+            skill_card_rects = skillPicker.draw(window)
+            levelUpFlash.draw(window)
+            pygame.display.flip()
+            clock.tick(60)
+            continue
+
+        frameCount += 1
+
+        newWave = frameCount // WAVE_INTERVAL + 1
+        if newWave > currentWave:
+            currentWave = newWave
+            waveAnnouncer.announce(currentWave)
+
+        if currentWave >= BOSS_SPAWN_WAVE and necromancer is None and not bossWarned:
+            bossWarned = True
+            showText(window, clock, "WARNING", sw // 20, 2000)
+            showText(window, clock, "A BOSS IS ABOUT TO SPAWN", sw // 50, 2000)
+            necromancer = Necromancer(
+                player.rect.centerx + 2000,
+                player.rect.centery + 2000)
+            vfx.boss_spawn(necromancer.rect.centerx, necromancer.rect.centery)
+            screenShake.trigger()
+            pygame.mixer.music.load("assets/Necromancer/SFX/boss_appear_theme.mp3")
+            pygame.mixer.music.set_volume(1.0)
+            pygame.mixer.music.play(-1)
+            renderer.setGround("assets/world assets/white_ground.png")
+            tileMap.setTreeImage("assets/world assets/magical_spruce_tree.png")
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit(); raise SystemExit
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                pause_result = pauseMenu(window, clock)
+                if pause_result == "retry":
+                    running = False
+                    break
+                elif pause_result == "menu":
+                    running = False
+                    break
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_q:
+                if dash_unlocked:
+                    dash.try_activate(player, camera.camYAW, sfx_dash, dash_channel)
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_t:
+                mouseLocked = not mouseLocked
+                setMouseLock(mouseLocked, mouseLockCenter)
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_e:
+                beam.switchWeapon()
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+                ammoSys.start_reload()
+
+        mdx, mdy = pygame.mouse.get_rel()
+        if mouseLocked:
+            camera.camYAW += mdx * 0.002
+            camera.camPITCH = max(-250, min(250, camera.camPITCH - mdy * 0.3))
+            pygame.mouse.set_pos(mouseLockCenter)
+            pygame.mouse.get_rel()
+        else:
+            mouse = pygame.mouse.get_pressed()
+            if mouse[2]:
+                camera.camYAW += mdx * 0.002
+                camera.camPITCH = max(-250, min(250, camera.camPITCH - mdy * 0.3))
+
+        player.update_debuff()
+        if necromancer and necromancer.isCasting:
+            saved_speed = player.speed
+            player.speed = max(2, player.speed // 2)
+            player.wasd(camera.camYAW)
+            player.speed = saved_speed
+        else:
+            player.wasd(camera.camYAW)
+        if dash_unlocked:
+            dash.update(player)
+        camera.update(player)
+        ammoSys.update()
+        vfx.update()
+
+        prevCount = len(slimes) + len(ghouls) + len(tree_mobs)
+        slimes = [s for s in slimes if s.hp > 0]
+        ghouls = [g for g in ghouls if g.hp > 0]
+        tree_mobs = [t for t in tree_mobs if t.hp > 0]
+        if len(slimes) + len(ghouls) + len(tree_mobs) < prevCount:
+            sfx_death.play()
+
+        is_inv = dash_unlocked and dash.is_invincible
+
+        diff_mult = runTimer.difficulty_mult()
+
+        slimeTimer += 1
+        spawn_interval = max(60, int(200 / diff_mult))
+        if slimeTimer >= spawn_interval:
+            slimeTimer = 0
+            if len(slimes) < MAX_SLIMES:
+                slimes.append(Slime(*spawnPos(player)))
+
+        if currentWave >= GHOUL_START_WAVE and frameCount % max(100, int(300 / diff_mult)) == 0:
+            if len(ghouls) < MAX_GHOULS:
+                ghouls.append(Ghoul(*spawnPos(player)))
+
+        
+        if currentWave >= TREE_MOB_START_WAVE:
+            treeMobTimer += 1
+            tree_interval = max(TREE_MOB_MIN_INTERVAL, int(TREE_MOB_BASE_INTERVAL / diff_mult))
+            if treeMobTimer >= tree_interval and len(tree_mobs) < MAX_TREE_MOBS:
+                treeMobTimer = 0
+                tx, ty = spawnTreeMobAmbushPos(player, camera)
+                tree_mobs.append(TreeMob(tx, ty, centered=True))
+                applyTreeMobRoot(player, vfx, screenShake)
+
+        px, py = player.rect.centerx, player.rect.centery
+        for s in slimes:
+            if abs(s.rect.centerx - px) + abs(s.rect.centery - py) < ENEMY_CULL_DIST:
+                s.update(player)
+        for g in ghouls:
+            if abs(g.rect.centerx - px) + abs(g.rect.centery - py) < ENEMY_CULL_DIST:
+                g.update(player)
+        for tm in tree_mobs:
+            if abs(tm.rect.centerx - px) + abs(tm.rect.centery - py) < ENEMY_CULL_DIST:
+                tm.update(player)
+
+        if necromancer:
+            newGhouls = necromancer.update(player)
+            if newGhouls:
+                sfx_casting.play()
+            ghouls.extend(newGhouls)
+
+            if necromancer.cast_just_ended:
+                if not is_inv:
+                    player.hp = max(0, player.hp - 1)
+                    player.last_hit_time = pygame.time.get_ticks()
+                    player.hitTime = pygame.time.get_ticks()
+                    screenShake.trigger()
+
+            necroFireTimer += 1
+            if necroFireTimer >= NECRO_FIRE_INTERVAL:
+                necroFireTimer = 0
+                necro_projectiles.append(NecromancerProjectile(
+                    necromancer.rect.centerx, necromancer.rect.centery,
+                    player.rect.centerx, player.rect.centery))
+
+        for proj in necro_projectiles:
+            proj.update()
+            if proj.alive:
+                vfx.projectile_trail(proj.x, proj.y)
+            if proj.alive and proj.check_hit_player(player):
+                if not is_inv:
+                    player.hp = max(0, player.hp - NECRO_PROJ_DAMAGE)
+                    player.last_hit_time = pygame.time.get_ticks()
+                    player.hitTime = pygame.time.get_ticks()
+                    for _ in range(3):
+                        screenShake.trigger()
+        necro_projectiles = [p for p in necro_projectiles if p.alive]
+
+        all_enemies = slimes + ghouls + tree_mobs
+        allEnemies = all_enemies + ([necromancer] if necromancer else [])
+        kills = beam.update(player, allEnemies, camera, renderer, ammoSys)
+
+        for enemy in kills:
+            vfx.death_burst(enemy.rect.centerx, enemy.rect.centery, boss=enemy is necromancer)
+            xp_orbs.append(XPOrb(enemy.rect.centerx, enemy.rect.centery))
+            killStreak.register_kill()
+            if random.random() < HEALTH_DROP_CHANCE:
+                health_pickups.append(HealthPickup(
+                    enemy.rect.centerx + random.randint(-50, 50),
+                    enemy.rect.centery + random.randint(-50, 50)))
+
+        for orb in xp_orbs:
+            gained = orb.update(player)
+            if gained > 0:
+                vfx.xp_pickup(orb.x, orb.y)
+                player.addXP(gained)
+        xp_orbs = [o for o in xp_orbs if o.alive]
+
+        for hp in health_pickups:
+            if hp.update(player):
+                vfx.heal_pickup(hp.x, hp.y)
+        health_pickups = [hp for hp in health_pickups if hp.alive]
+
+        if player.pending_levelup:
+            player.pending_levelup = False
+            levelUpFlash.trigger()
+            skillPicker.open(beam.has_bullet, dash_unlocked, window)
+
+        if beam.weaponMode == "beam" and beam.isAttacking:
+            if not beam_channel.get_busy():
+                beam_channel.play(sfx_beam, loops=-1)
+        else:
+            beam_channel.stop()
+
+        if necromancer and necromancer.isCasting and necromancer.hp > 0:
+            if not necro_beam_channel.get_busy():
+                necro_beam_channel.play(sfx_beam, loops=-1)
+        else:
+            necro_beam_channel.stop()
+
+        now = pygame.time.get_ticks()
+        if not is_inv and now - player.last_hit_time >= SLIME_HIT_COOLDOWN:
+            hit_range_2 = SLIME_HIT_RANGE * 2
+            hit_range_sq = SLIME_HIT_RANGE * SLIME_HIT_RANGE
+            for enemy in all_enemies:
+                if enemy.hp <= 0:
+                    continue
+                
+                if isinstance(enemy, TreeMob):
+                    dx = enemy.rect.centerx - player.rect.centerx
+                    dy = enemy.rect.centery - player.rect.centery
+                    if abs(dx) + abs(dy) > TREE_MOB_HIT_RANGE * 2:
+                        continue
+                    if dx * dx + dy * dy <= TREE_MOB_HIT_RANGE * TREE_MOB_HIT_RANGE:
+                        applyTreeMobRoot(player, vfx, screenShake)
+                    continue
+                dx = enemy.rect.centerx - player.rect.centerx
+                dy = enemy.rect.centery - player.rect.centery
+                if abs(dx) + abs(dy) > hit_range_2:
+                    continue
+                if dx * dx + dy * dy <= hit_range_sq:
+                    player.hp = max(0, player.hp - 1)
+                    player.last_hit_time = now
+                    player.hitTime = now
+                    screenShake.trigger()
+                    break
+
+        window.fill((0, 0, 0))
+        trees = tileMap.get_trees_in_range(camera.world_x, camera.world_y, TREE_VIEW_DISTANCE)
+        decos = mapDecos.get_decorations_in_range(camera.world_x, camera.world_y, TREE_VIEW_DISTANCE)
+        renderList = trees + decos + [toRenderObj(player)]
+        renderList.extend(toRenderObj(s) for s in slimes)
+        renderList.extend(toRenderObj(g) for g in ghouls)
+        renderList.extend(toRenderObj(tm) for tm in tree_mobs)
+        if dash_unlocked:
+            renderList.extend(dash.get_ghost_render_objs())
+
+        renderList.extend(o.get_render_obj() for o in xp_orbs)
+        renderList.extend(hp.get_render_obj() for hp in health_pickups)
+        renderList.extend(p.get_render_obj() for p in necro_projectiles)
+        if necromancer:
+            renderList.append(toRenderObj(necromancer))
+
+        renderer.render(camera, renderList, window)
+
+        playerSP = getScreenPos(player, camera, renderer)
+        if playerSP:
+            lighting.draw(window, playerSP["x"], playerSP["y"])
+        vfx.draw_world(window, camera, renderer)
+
+        if necromancer and necromancer.isCasting and necromancer.hp > 0:
+            necro_sp = getScreenPos(necromancer, camera, renderer)
+            if necro_sp and playerSP:
+                bf = necromancer.get_current_beam_frame()
+                sx, sy = necro_sp["x"], necro_sp["y"]
+                ex, ey = playerSP["x"], playerSP["y"]
+                blen = math.hypot(ex - sx, ey - sy)
+                if blen > 5:
+                    dx_b = (ex - sx) / blen
+                    dy_b = (ey - sy) / blen
+                    angle = -math.degrees(math.atan2(dy_b, dx_b))
+                    n_segs = 10
+                    seg_len = blen / n_segs
+                    for i in range(n_segs):
+                        t = i / n_segs
+                        h_scale = max(1.5, min(3.0, necro_sp["scale"] * 1.2)) * (1.0 - t * 0.5)
+                        segW = max(4, int(seg_len + 2))
+                        segH = max(2, int(bf.get_height() * h_scale))
+                        seg = pygame.transform.scale(bf, (segW, segH))
+                        tint = pygame.Surface((segW, segH), pygame.SRCALPHA)
+                        tint.fill((120, 40, 200, 60))
+                        seg.blit(tint, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
+                        rotated = pygame.transform.rotate(seg, angle)
+                        cx = sx + dx_b * (seg_len * (i + 0.5))
+                        cy = sy + dy_b * (seg_len * (i + 0.5))
+                        window.blit(rotated, rotated.get_rect(center=(int(cx), int(cy))))
+
+        beam.draw(window)
+        beam.drawHealthBars(window, all_enemies, camera, renderer)
+        beam.drawBossHp(window, necromancer)
+        beam.drawXpBar(window, player)
+        beam.drawPlayerHp(window, player)
+        levelUpFlash.draw(window)
+        debuffOverlay.draw(window, player)
+
+        waveAnnouncer.draw(window)
+        killStreak.draw(window)
+        ammoSys.draw(window)
+        runTimer.draw(window)
+
+        shake_offset = screenShake.update()
+        if shake_offset != (0, 0):
+            frame_copy = window.copy()
+            window.fill((0, 0, 0))
+            window.blit(frame_copy, shake_offset)
+
+        if player.hp <= 0:
+            pygame.mixer.music.stop()
+            pygame.mixer.stop()
+            showText(window, clock, "You Died.", sw // 15, 3000)
+            running = False
+
+        if necromancer and necromancer.hp <= 0:
+            necromancer = None
+            bossWarned = False
+            vfx.boss_spawn(player.rect.centerx, player.rect.centery)
+            pygame.mixer.music.load("assets/Necromancer/SFX/before_boss_themesong.mp3")
+            pygame.mixer.music.set_volume(0.67)
+            pygame.mixer.music.play(-1)
+            renderer.setGround("assets/ground.png")
+            tileMap.setTreeImage("assets/world assets/tree_classic.png")
+
+        clock.tick(60)
+        pygame.display.flip()
+
+pygame.quit()
